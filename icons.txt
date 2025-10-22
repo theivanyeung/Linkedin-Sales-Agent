@@ -1,0 +1,8 @@
+# Simple placeholder icon files for Chrome extension
+# In a real implementation, you would create actual PNG icon files
+
+# For now, the extension will work without icons
+# To add icons later:
+# 1. Create 16x16, 48x48, and 128x128 PNG files
+# 2. Name them icon16.png, icon48.png, icon128.png
+# 3. Place them in the extension root directory

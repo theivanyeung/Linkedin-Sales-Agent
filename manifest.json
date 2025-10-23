@@ -1,19 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "LinkedIn Message Extractor",
+  "name": "LinkedIn DOM Extractor",
   "version": "1.0",
-  "description": "Extract LinkedIn conversation messages for sales automation",
-  "permissions": ["activeTab", "clipboardWrite"],
+  "description": "Extract LinkedIn page DOM for analysis",
+  "permissions": ["activeTab", "downloads", "scripting"],
   "host_permissions": ["https://www.linkedin.com/*"],
-  "content_scripts": [
-    {
-      "matches": ["https://www.linkedin.com/messaging/thread/*"],
-      "js": ["content.js"],
-      "run_at": "document_end"
-    }
-  ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "LinkedIn Message Extractor"
+    "default_title": "LinkedIn DOM Extractor"
   }
 }
+

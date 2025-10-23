@@ -1,0 +1,635 @@
+{
+  "metadata": {
+    "threadId": "2-YjRjNGQ4ZDctNzkwOS00ZDBmLWI1YzQtYTFmYmM1MTQyMmI3XzEwMA==",
+    "url": "https://www.linkedin.com/messaging/thread/2-YjRjNGQ4ZDctNzkwOS00ZDBmLWI1YzQtYTFmYmM1MTQyMmI3XzEwMA==/?searchTerm=jack%20harman",
+    "title": "(3) Messaging | LinkedIn",
+    "extractedAt": "2025-10-23T03:30:48.785Z",
+    "extractedBy": "LinkedIn DOM Extractor",
+    "version": "2.0"
+  },
+  "conversation": {
+    "messageCount": 20,
+    "participants": [
+      "You",
+      "Jack Harman"
+    ],
+    "messages": [
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 0,
+        "isFromYou": true,
+        "links": [
+          {
+            "text": "View Ivan’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          },
+          {
+            "text": "Ivan Yeung",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          },
+          {
+            "text": "https://app.prodicity.org/",
+            "title": "",
+            "url": "https://app.prodicity.org/"
+          },
+          {
+            "text": "",
+            "title": "",
+            "url": "https://app.prodicity.org/app.prodicity.org"
+          },
+          {
+            "text": "Prodicity | The world's leading fellowship program for ambitious teens.\n  \n\n                          \n  \n      app.prodicity.org",
+            "title": "",
+            "url": "https://app.prodicity.org/app.prodicity.org"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-0",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Ivan Yeung",
+        "status": "sent",
+        "text": "It was a pleasure to chat Jack! Feel free to text me here if you have any questions or concerns. Here’s the link to the application if you haven’t received it: https://app.prodicity.org/",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n         msg-s-event-listitem--m2m-msg-followed-by-date-boundary\n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n         msg-s-event-listitem--other\n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 1,
+        "isFromYou": false,
+        "links": [
+          {
+            "text": "View Jack’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          },
+          {
+            "text": "Jack Harman",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-1",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Jack Harman",
+        "status": "sent",
+        "text": "Will do",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n        \n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 2,
+        "isFromYou": true,
+        "links": [
+          {
+            "text": "View Ivan’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          },
+          {
+            "text": "Ivan Yeung",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          },
+          {
+            "text": "https://calendly.com/theivanyeung/call",
+            "title": "",
+            "url": "https://calendly.com/theivanyeung/call"
+          },
+          {
+            "text": "Calendly\n  \n\n                          \n  \n      calendly.com",
+            "title": "",
+            "url": "https://calendly.com/theivanyeung/call"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-2",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Ivan Yeung",
+        "status": "sent",
+        "text": "Hi Jack,I’ve been able to secure a spot for you in our mentorship program. An email with more details has been sent to you. Please book an onboarding call with me using this link: https://calendly.com/theivanyeung/call",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 3,
+        "isFromYou": true,
+        "links": [],
+        "mentions": [],
+        "messageId": "msg-3",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "",
+        "status": "sent",
+        "text": "Tomorrow morning/noon works best",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n         msg-s-event-listitem--m2m-msg-followed-by-date-boundary\n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n         msg-s-event-listitem--other\n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 4,
+        "isFromYou": false,
+        "links": [
+          {
+            "text": "View Jack’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          },
+          {
+            "text": "Jack Harman",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-4",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Jack Harman",
+        "status": "sent",
+        "text": "Perfect",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n         msg-s-event-listitem--other\n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 5,
+        "isFromYou": false,
+        "links": [
+          {
+            "text": "View Jack’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          },
+          {
+            "text": "Jack Harman",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-5",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Jack Harman",
+        "status": "sent",
+        "text": "Hi Ivan, I know we have a meeting scheduled for tomorrow, but I have a conflict, unfortunately. Can we reschedule for Sunday?",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n        \n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 6,
+        "isFromYou": true,
+        "links": [
+          {
+            "text": "View Ivan’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          },
+          {
+            "text": "Ivan Yeung",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-6",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Ivan Yeung",
+        "status": "sent",
+        "text": "Please reschedule for sunday evening",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n         msg-s-event-listitem--m2m-msg-followed-by-date-boundary\n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 7,
+        "isFromYou": true,
+        "links": [
+          {
+            "text": "https://calendly.com/theivanyeung/call",
+            "title": "",
+            "url": "https://calendly.com/theivanyeung/call"
+          },
+          {
+            "text": "Calendly\n  \n\n                          \n  \n      calendly.com",
+            "title": "",
+            "url": "https://calendly.com/theivanyeung/call"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-7",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "",
+        "status": "sent",
+        "text": "https://calendly.com/theivanyeung/call",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n         msg-s-event-listitem--m2m-msg-followed-by-date-boundary\n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n         msg-s-event-listitem--other\n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 8,
+        "isFromYou": false,
+        "links": [
+          {
+            "text": "View Jack’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          },
+          {
+            "text": "Jack Harman",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-8",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Jack Harman",
+        "status": "sent",
+        "text": "Hi Ivan, I hope you’re having a great week. Regarding the meeting for the summmer program, I was wondering if we could move it to tomorrow because I have a track event that was rescheduled to 3:20pm. Thanks, see you soon.",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n        \n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 9,
+        "isFromYou": true,
+        "links": [
+          {
+            "text": "View Ivan’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          },
+          {
+            "text": "Ivan Yeung",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-9",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Ivan Yeung",
+        "status": "sent",
+        "text": "Thanks for the notice!",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 10,
+        "isFromYou": true,
+        "links": [],
+        "mentions": [],
+        "messageId": "msg-10",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "",
+        "status": "sent",
+        "text": "Let me know what times work for you and your parents next weekend 24/25th, morning/noon.",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n         msg-s-event-listitem--other\n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 11,
+        "isFromYou": false,
+        "links": [
+          {
+            "text": "View Jack’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          },
+          {
+            "text": "Jack Harman",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-11",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Jack Harman",
+        "status": "sent",
+        "text": "Does 12:30 on Sunday the 25th work?",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": false,
+        "index": 12,
+        "isFromYou": true,
+        "links": [
+          {
+            "text": "View Ivan’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          },
+          {
+            "text": "Ivan Yeung",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-12",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Ivan Yeung",
+        "status": "sent",
+        "text": "This message has been deleted.",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n        \n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 13,
+        "isFromYou": true,
+        "links": [
+          {
+            "text": "View Ivan’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          },
+          {
+            "text": "Ivan Yeung",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-13",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Ivan Yeung",
+        "status": "sent",
+        "text": "That works, see you then!",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 14,
+        "isFromYou": true,
+        "links": [],
+        "mentions": [],
+        "messageId": "msg-14",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "",
+        "status": "sent",
+        "text": "Also any updates or breakthroughs on the baits?",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n         msg-s-event-listitem--other\n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 15,
+        "isFromYou": false,
+        "links": [
+          {
+            "text": "View Jack’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          },
+          {
+            "text": "Jack Harman",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-15",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Jack Harman",
+        "status": "sent",
+        "text": "Nothing huge yet, but I made more prototypes with the new solution and am pretty pleased with them. They feel like traditional baits with their flexibility/durability and are holding up well in storage.",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n         msg-s-event-listitem--other\n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 16,
+        "isFromYou": false,
+        "links": [
+          {
+            "text": "View Jack’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          },
+          {
+            "text": "Jack Harman",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-16",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Jack Harman",
+        "status": "sent",
+        "text": "Also, I think LinkedIn had a small glitch, but it showed your deleted message for a split second and actually 1 o clock would work better if it works for you.",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n        \n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 17,
+        "isFromYou": true,
+        "links": [
+          {
+            "text": "View Ivan’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          },
+          {
+            "text": "Ivan Yeung",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAADXsB-cBMm0j8R-jQgTob2LwGyZtiHRXZKA"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-17",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Ivan Yeung",
+        "status": "sent",
+        "text": "That's awesome, let's see how effective they are in practice",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n        \n        \n        \n         msg-s-event-listitem--last-in-group\n        \n        \n        \n        \n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 18,
+        "isFromYou": true,
+        "links": [],
+        "mentions": [],
+        "messageId": "msg-18",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "",
+        "status": "sent",
+        "text": "1 would be better, I'll send you the zoom link 15 minutes prior to the call",
+        "timestamp": ""
+      },
+      {
+        "attachments": [],
+        "element": {
+          "className": "msg-s-event-listitem\n         msg-s-event-listitem--m2m-msg-followed-by-date-boundary\n        \n        \n         msg-s-event-listitem--last-in-group\n         msg-s-event-listitem--has-seen-receipts\n        \n        \n         msg-s-event-listitem--other\n        \n        ",
+          "id": "",
+          "tagName": "DIV"
+        },
+        "hasReplyButton": true,
+        "index": 19,
+        "isFromYou": false,
+        "links": [
+          {
+            "text": "View Jack’s profile",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          },
+          {
+            "text": "Jack Harman",
+            "title": "",
+            "url": "https://www.linkedin.com/in/ACoAAFLlutcBDp0IRpWRdC4WxiB844R-TLgyxZI"
+          }
+        ],
+        "mentions": [],
+        "messageId": "msg-19",
+        "messageType": "text",
+        "reactions": [],
+        "senderName": "Jack Harman",
+        "status": "sent",
+        "text": "I am excited, I should be able to put some hours in next weekend with them.",
+        "timestamp": ""
+      }
+    ],
+    "statistics": {
+      "averageMessageLength": 84,
+      "messageTypes": {
+        "text": 20
+      },
+      "messagesFromThem": 8,
+      "messagesFromYou": 12,
+      "messagesWithAttachments": 0,
+      "messagesWithReplies": 19,
+      "totalCharacters": 1687,
+      "totalLinks": 37,
+      "totalMentions": 0,
+      "totalMessages": 20,
+      "totalReactions": 0
+    }
+  }
+}

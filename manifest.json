@@ -1,13 +1,31 @@
 {
   "manifest_version": 3,
-  "name": "LinkedIn DOM Extractor",
+  "name": "LinkedIn Sales Agent",
   "version": "1.0",
-  "description": "Extract LinkedIn page DOM for analysis",
-  "permissions": ["activeTab", "downloads", "scripting"],
-  "host_permissions": ["https://www.linkedin.com/*"],
+  "description": "AI-powered LinkedIn sales co-pilot for Prodicity",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "scripting",
+    "sidePanel",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://*.firebaseio.com/*",
+    "https://*.googleapis.com/*"
+  ],
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "LinkedIn DOM Extractor"
+    "default_title": "LinkedIn Sales Agent"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' https://www.gstatic.com https://*.firebaseio.com; object-src 'self'"
   }
 }
 

@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <style>
       body {
-        width: 300px;
+        width: 100%;
+        min-width: 400px;
         padding: 16px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
           sans-serif;
@@ -96,10 +97,29 @@
 
     <button class="btn" id="extractBtn">Extract DOM</button>
 
+    <button
+      class="btn"
+      id="testInputBtn"
+      style="margin-top: 8px; background: #28a745"
+    >
+      Test Message Input
+    </button>
+
+    <button
+      class="btn"
+      id="saveToFirebaseBtn"
+      style="margin-top: 8px; background: #ff6b35"
+    >
+      Save to Firebase
+    </button>
+
     <div class="info">
-      💡 Downloads the entire page DOM as an HTML file for analysis
+      💡 Downloads conversation data as JSON for AI processing
     </div>
 
+    <script src="firebase-config.js"></script>
+    <script src="firebase-service.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
+

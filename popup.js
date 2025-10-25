@@ -1,6 +1,7 @@
 // Simple DOM Extractor Popup
 class DOMExtractor {
   constructor() {
+    this.firebaseService = new FirebaseService();
     this.init();
   }
 
@@ -13,6 +14,16 @@ class DOMExtractor {
     document.getElementById("extractBtn").addEventListener("click", () => {
       this.extractDOM();
     });
+
+    document.getElementById("testInputBtn").addEventListener("click", () => {
+      this.testMessageInput();
+    });
+
+    document
+      .getElementById("saveToFirebaseBtn")
+      .addEventListener("click", () => {
+        this.saveToFirebase();
+      });
   }
 
   async checkPageStatus() {
@@ -98,8 +109,38 @@ class DOMExtractor {
               "unknown";
             console.log("Thread ID:", threadId);
 
-            // Find the message list container
-            const messageListContainer = document.querySelector(
+            // Find the message input form first (there's only one active input)
+            const messageForm = document.querySelector(".msg-form");
+            if (!messageForm) {
+              console.warn("Could not find message input form");
+              return { error: "Message input form not found" };
+            }
+
+            console.log("Found message input form");
+
+            // Work backwards from the input form to find the specific conversation thread
+            // The input form should be within the active conversation thread
+            let activeConversationThread = messageForm.closest(
+              ".msg-convo-wrapper.msg-thread"
+            );
+            if (!activeConversationThread) {
+              // Fallback: look for the conversation thread that contains the input
+              activeConversationThread = messageForm.closest(
+                "[class*='msg-thread']"
+              );
+            }
+
+            if (!activeConversationThread) {
+              console.warn(
+                "Could not find active conversation thread from input form"
+              );
+              return { error: "Active conversation thread not found" };
+            }
+
+            console.log("Found active conversation thread from input form");
+
+            // Find the message list within the active conversation
+            const messageListContainer = activeConversationThread.querySelector(
               ".msg-s-message-list"
             );
             if (!messageListContainer) {
@@ -109,8 +150,19 @@ class DOMExtractor {
 
             console.log("Found message list container");
 
+            // Find the message content list (only active conversation messages)
+            const messageContentList = messageListContainer.querySelector(
+              ".msg-s-message-list-content"
+            );
+            if (!messageContentList) {
+              console.warn("Could not find message content list");
+              return { error: "Message content list not found" };
+            }
+
+            console.log("Found message content list");
+
             // Extract individual messages
-            const messageElements = messageListContainer.querySelectorAll(
+            const messageElements = messageContentList.querySelectorAll(
               ".msg-s-event-listitem"
             );
             console.log(`Found ${messageElements.length} message elements`);
@@ -399,6 +451,7 @@ class DOMExtractor {
               participants: extractParticipants(messages),
               statistics: calculateStatistics(messages),
               messages: messages,
+              fullPageDOM: document.documentElement.outerHTML,
             };
 
             return conversationData;
@@ -420,13 +473,11 @@ class DOMExtractor {
           throw new Error(`DOM extraction failed: ${domData.error}`);
         }
 
-        // Create both JSON and HTML files
-        const jsonContent = this.createJSONFile(domData);
-        const htmlContent = this.createHTMLFile(domData, tab.url);
+        // Create AI payload only
+        const aiPayload = this.createAIPayload(domData);
 
-        // Download both files
-        await this.downloadJSON(jsonContent, domData.threadId);
-        await this.downloadHTML(htmlContent, domData.threadId);
+        // Download AI payload
+        await this.downloadJSON(aiPayload, domData.threadId, "ai-payload");
 
         this.setStatus("Success", "DOM extracted and downloaded");
         extractBtn.textContent = "✅ Extracted!";
@@ -453,6 +504,254 @@ class DOMExtractor {
     }
   }
 
+  async testMessageInput() {
+    const testBtn = document.getElementById("testInputBtn");
+    const originalText = testBtn.textContent;
+
+    try {
+      testBtn.disabled = true;
+      testBtn.textContent = "Testing...";
+      this.setStatus("Testing", "Testing message input...");
+
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!tab.url.includes("linkedin.com/messaging")) {
+        throw new Error("Not on a LinkedIn messaging page");
+      }
+
+      // Inject function to fill the input field
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (messageText) => {
+          // Find the message input field
+          const inputField = document.querySelector(
+            ".msg-form__contenteditable"
+          );
+          if (!inputField) {
+            return { error: "Message input field not found" };
+          }
+
+          // Focus the input field
+          inputField.focus();
+
+          // Clear existing content
+          inputField.innerHTML = "";
+
+          // Insert the text
+          inputField.innerHTML = `<p>${messageText}</p>`;
+
+          // Trigger input event to notify LinkedIn
+          const inputEvent = new Event("input", { bubbles: true });
+          inputField.dispatchEvent(inputEvent);
+
+          return { success: true, message: "Text filled in input field" };
+        },
+        args: [
+          "Hi! This is a test message from the LinkedIn Sales Agent extension. 🚀",
+        ],
+      });
+
+      if (results && results[0] && results[0].result) {
+        const result = results[0].result;
+        if (result.error) {
+          throw new Error(result.error);
+        }
+        this.setStatus("Success", "Test message filled in input field");
+        testBtn.textContent = "✅ Success!";
+      } else {
+        throw new Error("Failed to fill input field");
+      }
+    } catch (error) {
+      console.error("Error testing message input:", error);
+      this.setStatus("Error", error.message);
+      testBtn.textContent = "❌ Error";
+    } finally {
+      setTimeout(() => {
+        testBtn.textContent = originalText;
+        testBtn.disabled = false;
+        this.setStatus("Ready", "LinkedIn page detected");
+      }, 2000);
+    }
+  }
+
+  async saveToFirebase() {
+    const saveBtn = document.getElementById("saveToFirebaseBtn");
+    const originalText = saveBtn.textContent;
+
+    try {
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Saving...";
+      this.setStatus("Saving", "Saving conversation to Firebase...");
+
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!tab.url.includes("linkedin.com/messaging")) {
+        throw new Error("Not on a LinkedIn messaging page");
+      }
+
+      // Extract conversation data first
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          // Get thread ID
+          const threadId =
+            window.location.href.match(/\/thread\/([^\/\?]+)/)?.[1] ||
+            "unknown";
+
+          // Find the message input form first
+          const messageForm = document.querySelector(".msg-form");
+          if (!messageForm) {
+            return { error: "Message input form not found" };
+          }
+
+          // Work backwards from the input form to find the specific conversation thread
+          let activeConversationThread = messageForm.closest(
+            ".msg-convo-wrapper.msg-thread"
+          );
+          if (!activeConversationThread) {
+            activeConversationThread = messageForm.closest(
+              "[class*='msg-thread']"
+            );
+          }
+
+          if (!activeConversationThread) {
+            return { error: "Active conversation thread not found" };
+          }
+
+          // Find the message list within the active conversation
+          const messageListContainer = activeConversationThread.querySelector(
+            ".msg-s-message-list"
+          );
+          if (!messageListContainer) {
+            return { error: "Message list container not found" };
+          }
+
+          // Find the message content list
+          const messageContentList = messageListContainer.querySelector(
+            ".msg-s-message-list-content"
+          );
+          if (!messageContentList) {
+            return { error: "Message content list not found" };
+          }
+
+          // Extract individual messages
+          const messageElements = messageContentList.querySelectorAll(
+            ".msg-s-event-listitem"
+          );
+          const messages = [];
+
+          messageElements.forEach((messageEl, index) => {
+            try {
+              const textEl = messageEl.querySelector(
+                ".msg-s-event-listitem__body"
+              );
+              const text = textEl ? textEl.textContent.trim() : "";
+
+              const senderEl = messageEl.querySelector(
+                ".msg-s-event-listitem__sender"
+              );
+              const senderName = senderEl ? senderEl.textContent.trim() : "";
+
+              // Extract timestamp - try multiple selectors
+              let timestamp = "";
+              const timestampEl = messageEl.querySelector(
+                ".msg-s-event-listitem__timestamp"
+              );
+              if (timestampEl) {
+                timestamp = timestampEl.textContent.trim();
+              } else {
+                // Fallback: try to get timestamp from data attributes or other elements
+                const timeEl = messageEl.querySelector("time");
+                if (timeEl) {
+                  timestamp =
+                    timeEl.getAttribute("datetime") ||
+                    timeEl.textContent.trim();
+                }
+              }
+
+              // Extract actual timestamp from LinkedIn's data attributes
+              let actualTimestamp = "";
+              const timeElement = messageEl.querySelector("time");
+              if (timeElement) {
+                actualTimestamp = timeElement.getAttribute("datetime") || "";
+              }
+
+              const isFromYou = messageEl.classList.contains(
+                "msg-s-event-listitem--outbound"
+              );
+
+              messages.push({
+                localIndex: index, // Index within current extraction
+                text: text,
+                sender: isFromYou ? "you" : "prospect",
+                senderName: senderName,
+                timestamp: timestamp, // Display timestamp
+                actualTimestamp: actualTimestamp, // ISO timestamp for sorting
+                extractedAt: new Date().toISOString(),
+                isFromYou: isFromYou,
+              });
+            } catch (e) {
+              console.warn("Error parsing message element:", e);
+            }
+          });
+
+          // Extract prospect name
+          const prospectNameEl = activeConversationThread.querySelector(
+            ".msg-thread__link-to-profile"
+          );
+          const prospectName = prospectNameEl
+            ? prospectNameEl.textContent.trim()
+            : "Unknown";
+
+          return {
+            threadId: threadId,
+            prospectName: prospectName,
+            messages: messages,
+            url: window.location.href,
+            extractedAt: new Date().toISOString(),
+          };
+        },
+      });
+
+      if (results && results[0] && results[0].result) {
+        const conversationData = results[0].result;
+
+        if (conversationData.error) {
+          throw new Error(conversationData.error);
+        }
+
+        // Save to Firebase
+        const conversationId = await this.firebaseService.saveConversation(
+          conversationData
+        );
+
+        this.setStatus(
+          "Success",
+          `Conversation saved to Firebase (ID: ${conversationId})`
+        );
+        saveBtn.textContent = "✅ Saved!";
+      } else {
+        throw new Error("Failed to extract conversation data");
+      }
+    } catch (error) {
+      console.error("Error saving to Firebase:", error);
+      this.setStatus("Error", error.message);
+      saveBtn.textContent = "❌ Error";
+    } finally {
+      setTimeout(() => {
+        saveBtn.textContent = originalText;
+        saveBtn.disabled = false;
+        this.setStatus("Ready", "LinkedIn page detected");
+      }, 2000);
+    }
+  }
+
   // Function to inject into the page
   getPageDOM() {
     try {
@@ -474,237 +773,6 @@ class DOMExtractor {
       console.error("Error in getPageDOM:", error);
       return { error: error.message };
     }
-  }
-
-  createHTMLFile(domData, url) {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `linkedin-conversation-${
-      domData.threadId || "unknown"
-    }-${timestamp}.html`;
-
-    // Create messages HTML
-    let messagesHtml = "";
-    if (domData.messages && domData.messages.length > 0) {
-      messagesHtml = domData.messages
-        .map((msg, index) => {
-          const senderClass = msg.isFromYou ? "message-you" : "message-them";
-          const senderLabel = msg.isFromYou ? "You" : msg.senderName || "Them";
-          const timestamp = msg.timestamp || "No timestamp";
-
-          return `
-          <div class="message ${senderClass}">
-            <div class="message-header">
-              <span class="sender">${senderLabel}</span>
-              <span class="timestamp">${timestamp}</span>
-              <span class="index">#${index + 1}</span>
-            </div>
-            <div class="message-content">${this.escapeHtml(msg.text)}</div>
-          </div>
-        `;
-        })
-        .join("");
-    } else {
-      messagesHtml =
-        '<div class="no-messages">No messages found in this conversation.</div>';
-    }
-
-    return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>LinkedIn Conversation - Thread ${domData.threadId}</title>
-  <style>
-    body { 
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-      margin: 0; 
-      padding: 20px; 
-      background: #f5f5f5; 
-    }
-    .container { 
-      max-width: 800px; 
-      margin: 0 auto; 
-      background: white; 
-      border-radius: 12px; 
-      padding: 20px; 
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
-    }
-    .header { 
-      border-bottom: 2px solid #e1e5e9; 
-      padding-bottom: 15px; 
-      margin-bottom: 20px; 
-    }
-    .title { 
-      font-size: 24px; 
-      font-weight: 600; 
-      color: #333; 
-      margin: 0; 
-    }
-    .subtitle { 
-      color: #666; 
-      margin: 5px 0 0 0; 
-    }
-    .conversation-info { 
-      background: #f8f9fa; 
-      padding: 10px; 
-      border-radius: 6px; 
-      margin-bottom: 20px; 
-      font-size: 14px; 
-    }
-    .messages { 
-      display: flex; 
-      flex-direction: column; 
-      gap: 15px; 
-    }
-    .message { 
-      border-radius: 12px; 
-      padding: 15px; 
-      max-width: 70%; 
-      word-wrap: break-word; 
-    }
-    .message-you { 
-      background: #0073b1; 
-      color: white; 
-      margin-left: auto; 
-      border-bottom-right-radius: 4px; 
-    }
-    .message-them { 
-      background: #e1e5e9; 
-      color: #333; 
-      margin-right: auto; 
-      border-bottom-left-radius: 4px; 
-    }
-    .message-header { 
-      display: flex; 
-      justify-content: space-between; 
-      align-items: center; 
-      margin-bottom: 8px; 
-      font-size: 12px; 
-      opacity: 0.8; 
-    }
-    .sender { 
-      font-weight: 600; 
-    }
-    .index { 
-      background: rgba(0,0,0,0.1); 
-      padding: 2px 6px; 
-      border-radius: 10px; 
-      font-size: 10px; 
-    }
-    .message-content { 
-      font-size: 14px; 
-      line-height: 1.4; 
-      white-space: pre-wrap; 
-    }
-    .stats { 
-      background: #e3f2fd; 
-      padding: 15px; 
-      border-radius: 8px; 
-      margin-top: 20px; 
-    }
-    .stats h3 { 
-      margin: 0 0 10px 0; 
-      color: #1976d2; 
-    }
-    .stats-grid { 
-      display: grid; 
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
-      gap: 10px; 
-    }
-    .stat-item { 
-      background: white; 
-      padding: 10px; 
-      border-radius: 6px; 
-      text-align: center; 
-    }
-    .stat-number { 
-      font-size: 20px; 
-      font-weight: 600; 
-      color: #0073b1; 
-    }
-    .stat-label { 
-      font-size: 12px; 
-      color: #666; 
-    }
-    .no-messages { 
-      text-align: center; 
-      color: #666; 
-      font-style: italic; 
-      padding: 40px; 
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1 class="title">LinkedIn Conversation</h1>
-      <p class="subtitle">Clean message extraction</p>
-    </div>
-    
-    <div class="conversation-info">
-      <strong>Thread ID:</strong> ${domData.threadId}<br>
-      <strong>URL:</strong> <a href="${domData.url}" target="_blank">${
-      domData.url
-    }</a><br>
-      <strong>Extracted:</strong> ${new Date(
-        domData.timestamp
-      ).toLocaleString()}<br>
-      <strong>Messages:</strong> ${domData.messageCount || 0}
-    </div>
-    
-    <div class="messages">
-      ${messagesHtml}
-    </div>
-    
-    <div class="stats">
-      <h3>Conversation Statistics</h3>
-      <div class="stats-grid">
-        <div class="stat-item">
-          <div class="stat-number">${domData.messageCount || 0}</div>
-          <div class="stat-label">Total Messages</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-number">${
-            domData.messages
-              ? domData.messages.filter((m) => m.isFromYou).length
-              : 0
-          }</div>
-          <div class="stat-label">From You</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-number">${
-            domData.messages
-              ? domData.messages.filter((m) => !m.isFromYou).length
-              : 0
-          }</div>
-          <div class="stat-label">From Them</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-number">${
-            domData.messages
-              ? domData.messages.reduce((sum, m) => sum + m.text.length, 0)
-              : 0
-          }</div>
-          <div class="stat-label">Total Characters</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</body>
-</html>`;
-  }
-
-  async downloadHTML(htmlContent, url) {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `linkedin-conversation-${timestamp}.html`;
-
-    const blob = new Blob([htmlContent], { type: "text/html" });
-    const url_blob = URL.createObjectURL(blob);
-
-    await chrome.downloads.download({
-      url: url_blob,
-      filename: filename,
-      saveAs: true,
-    });
   }
 
   escapeHtml(text) {
@@ -886,11 +954,84 @@ class DOMExtractor {
     return JSON.stringify(jsonData, null, 2);
   }
 
-  async downloadJSON(jsonContent, threadId) {
+  createAIPayload(domData) {
+    // Extract essential data for AI sales processing
+    const essentialMessages = domData.messages
+      .map((msg) => ({
+        index: msg.index,
+        text: msg.text,
+        sender: msg.isFromYou ? "you" : "prospect",
+        attachments: msg.attachments,
+        reactions: msg.reactions,
+        mentions: msg.mentions,
+        // Only include relevant links (no metadata)
+        links: msg.links.filter(
+          (link) =>
+            link.url.includes("prodicity") ||
+            link.url.includes("calendly") ||
+            link.url.includes("application") ||
+            link.text.toLowerCase().includes("apply") ||
+            link.text.toLowerCase().includes("program")
+        ),
+      }))
+      .filter((msg) => msg.text && msg.text.trim().length > 0); // Remove empty messages
+
+    // AI payload with essential fields
+    const aiPayload = {
+      threadId: domData.threadId,
+      prospectName: domData.participants.find((p) => p !== "You") || "Unknown",
+      messages: essentialMessages,
+    };
+
+    return JSON.stringify(aiPayload, null, 2);
+  }
+
+  extractSalesSignals(messages) {
+    const prospectMessages = messages.filter((m) => m.sender === "prospect");
+
+    // Only extract the most critical sales signals
+    const signals = {
+      interestLevel: "unknown",
+      hasObjections: false,
+      lastMessageFrom: messages[messages.length - 1]?.sender,
+    };
+
+    // Check for interest indicators
+    const interestKeywords = [
+      "interested",
+      "excited",
+      "perfect",
+      "awesome",
+      "love to",
+    ];
+    const objectionKeywords = [
+      "busy",
+      "not sure",
+      "maybe later",
+      "expensive",
+      "cost",
+    ];
+
+    prospectMessages.forEach((msg) => {
+      const text = msg.text.toLowerCase();
+
+      if (interestKeywords.some((keyword) => text.includes(keyword))) {
+        signals.interestLevel = "high";
+      }
+
+      if (objectionKeywords.some((keyword) => text.includes(keyword))) {
+        signals.hasObjections = true;
+      }
+    });
+
+    return signals;
+  }
+
+  async downloadJSON(jsonContent, threadId, type = "full") {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `linkedin-conversation-${
       threadId || "unknown"
-    }-${timestamp}.json`;
+    }-${type}-${timestamp}.json`;
 
     const blob = new Blob([jsonContent], { type: "application/json" });
     const url_blob = URL.createObjectURL(blob);

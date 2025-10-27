@@ -8,13 +8,10 @@
     "downloads",
     "scripting",
     "sidePanel",
-    "notifications"
+    "notifications",
+    "storage"
   ],
-  "host_permissions": [
-    "https://www.linkedin.com/*",
-    "https://*.firebaseio.com/*",
-    "https://*.googleapis.com/*"
-  ],
+  "host_permissions": ["https://www.linkedin.com/*"],
   "action": {
     "default_title": "LinkedIn Sales Agent"
   },
@@ -23,9 +20,6 @@
   },
   "side_panel": {
     "default_path": "popup.html"
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' https://www.gstatic.com https://*.firebaseio.com; object-src 'self'"
   }
 }
 

@@ -1,7 +1,7 @@
 // Simple DOM Extractor Popup
 class DOMExtractor {
   constructor() {
-    this.firebaseService = new FirebaseService();
+    this.supabaseService = new SupabaseService();
     this.init();
   }
 
@@ -504,6 +504,29 @@ class DOMExtractor {
     }
   }
 
+  downloadConversationJSON(conversationData) {
+    try {
+      const jsonString = JSON.stringify(conversationData, null, 2);
+      const blob = new Blob([jsonString], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `linkedin-conversation-${conversationData.threadId}-${timestamp}.json`;
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      console.log(`Downloaded conversation JSON: ${filename}`);
+    } catch (error) {
+      console.error("Error downloading JSON:", error);
+    }
+  }
+
   async testMessageInput() {
     const testBtn = document.getElementById("testInputBtn");
     const originalText = testBtn.textContent;
@@ -726,14 +749,27 @@ class DOMExtractor {
           throw new Error(conversationData.error);
         }
 
-        // Save to Firebase
-        const conversationId = await this.firebaseService.saveConversation(
+        // Save locally first (for speed)
+        const storageKey = `linkedin_conversation_${conversationData.threadId}`;
+        const savedData = {
+          ...conversationData,
+          savedAt: new Date().toISOString(),
+        };
+
+        // Save to Chrome storage (backup)
+        await chrome.storage.local.set({
+          [storageKey]: savedData,
+        });
+
+        // Save to Supabase (cloud persistence)
+        this.setStatus("Saving", "Syncing to cloud...");
+        const threadId = await this.supabaseService.saveConversation(
           conversationData
         );
 
         this.setStatus(
           "Success",
-          `Conversation saved to Firebase (ID: ${conversationId})`
+          `Saved locally & to cloud! Thread ID: ${threadId}`
         );
         saveBtn.textContent = "✅ Saved!";
       } else {

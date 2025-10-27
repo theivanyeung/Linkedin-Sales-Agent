@@ -19,3 +19,4 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });
+

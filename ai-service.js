@@ -50,12 +50,18 @@ class AIService {
       }));
 
       // Extract prospect name
-      const name = prospectName || conversationData.prospectName || "Unknown";
+      const name =
+        prospectName ||
+        conversationData.title ||
+        conversationData.prospectName ||
+        "Unknown";
 
       // Prepare request payload
       const payload = {
         thread_id: conversationData.threadId,
         prospect_name: name,
+        title: conversationData.title || "",
+        description: conversationData.description || "",
         messages: messages,
         app_link: "", // Can be added later if available
       };
@@ -209,3 +215,4 @@ if (typeof module !== "undefined" && module.exports) {
 } else {
   window.AIService = AIService;
 }
+

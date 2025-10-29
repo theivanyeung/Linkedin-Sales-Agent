@@ -2,16 +2,21 @@
 class DOMExtractor {
   constructor() {
     this.supabaseService = new SupabaseService();
-    this.currentThreadId = null;
+    this.aiService = new AIService();
+    this.lastThreadId = null;
+    this.lastAutoSaveAt = 0;
+    this.consoleEntries = [];
     this.init();
   }
 
   init() {
-    this.aiService = new AIService();
     this.setupEventListeners();
     this.checkPageStatus();
-    this.loadCurrentConversation();
-    this.monitorUrlChanges();
+    // Start auto-save polling (side panel persists)
+    this.autoSaveInterval = setInterval(
+      () => this.autoSaveConversationIfNeeded(),
+      3000
+    );
   }
 
   setupEventListeners() {
@@ -19,16 +24,10 @@ class DOMExtractor {
       this.extractDOM();
     });
 
-    document
-      .getElementById("generateResponseBtn")
-      .addEventListener("click", () => {
-        this.generateAIResponse();
-      });
-
-    const regenerateBtn = document.getElementById("regenerateBtn");
-    if (regenerateBtn) {
-      regenerateBtn.addEventListener("click", () => {
-        this.generateAIResponse();
+    const genBtn = document.getElementById("generateResponseBtn");
+    if (genBtn) {
+      genBtn.addEventListener("click", () => {
+        this.generateResponse();
       });
     }
   }
@@ -41,10 +40,7 @@ class DOMExtractor {
       });
 
       if (tab.url && tab.url.includes("linkedin.com")) {
-        // Don't overwrite status during auto-extraction
-        if (!tab.url.includes("linkedin.com/messaging")) {
-          this.setStatus("Ready", "LinkedIn page detected");
-        }
+        this.setStatus("Ready", "LinkedIn page detected");
         document.getElementById("extractBtn").disabled = false;
       } else {
         this.setStatus("Inactive", "Navigate to a LinkedIn page");
@@ -59,6 +55,30 @@ class DOMExtractor {
   setStatus(text, details) {
     document.getElementById("statusText").textContent = text;
     document.getElementById("statusDetails").textContent = details;
+  }
+
+  addConsoleLog(tag, message, meta) {
+    try {
+      const list = document.getElementById("consoleList");
+      if (!list) return;
+      const ts = new Date().toLocaleTimeString();
+      const line = `[${ts}] ${tag}: ${message}${
+        meta ? ` ${JSON.stringify(meta)}` : ""
+      }`;
+      this.consoleEntries.push(line);
+      if (this.consoleEntries.length > 200) this.consoleEntries.shift();
+      list.textContent = this.consoleEntries.join("\n");
+      list.scrollTop = list.scrollHeight;
+    } catch (_) {}
+  }
+
+  updateLeadCard({ name = "—", description = "", dataHtml = "" } = {}) {
+    const nameEl = document.getElementById("leadName");
+    const descEl = document.getElementById("leadDescription");
+    const dataEl = document.getElementById("leadData");
+    if (nameEl) nameEl.textContent = `Lead: ${name}`;
+    if (descEl) descEl.textContent = description || "";
+    if (dataEl) dataEl.innerHTML = dataHtml || "";
   }
 
   async extractDOM() {
@@ -189,9 +209,14 @@ class DOMExtractor {
                 if (!text) return; // Skip empty messages
 
                 // Determine sender (you vs them)
-                const isFromYou = !messageEl.classList.contains(
-                  "msg-s-event-listitem--other"
-                );
+                const isFromYou =
+                  messageEl.classList.contains(
+                    "msg-s-event-listitem--outbound"
+                  ) ||
+                  messageEl.classList.contains("msg-s-event-listitem--self") ||
+                  !!messageEl.querySelector(
+                    ".msg-s-event-listitem__profile-picture--me, .msg-s-message-group--own"
+                  );
 
                 // Get timestamp
                 const timeEl = messageEl.querySelector(
@@ -325,17 +350,30 @@ class DOMExtractor {
                   return "sent";
                 }
 
-                function extractLinks(messageEl) {
-                  const links = [];
-                  const linkEls = messageEl.querySelectorAll("a[href]");
-                  linkEls.forEach((linkEl) => {
-                    links.push({
-                      url: linkEl.href,
-                      text: linkEl.textContent.trim(),
-                      title: linkEl.title || "",
+                function extractLinksFromBody(bodyEl, text) {
+                  const out = [];
+                  const urlSet = new Set();
+                  if (bodyEl) {
+                    bodyEl.querySelectorAll("a[href]").forEach((a) => {
+                      const url = a.getAttribute("href") || "";
+                      if (!url || urlSet.has(url)) return;
+                      urlSet.add(url);
+                      out.push({
+                        url,
+                        text: (a.textContent || "").trim(),
+                        title: a.title || "",
+                      });
                     });
-                  });
-                  return links;
+                    const urlRegex = /https?:\/\/[^\s)]+/g;
+                    let m;
+                    while ((m = urlRegex.exec(text)) !== null) {
+                      const url = m[0];
+                      if (urlSet.has(url)) continue;
+                      urlSet.add(url);
+                      out.push({ url, text: url, title: "" });
+                    }
+                  }
+                  return out;
                 }
 
                 function extractMentions(text) {
@@ -357,34 +395,20 @@ class DOMExtractor {
                 // Extract message status (sent, delivered, read)
                 const status = extractMessageStatus(messageEl);
 
-                // Extract message ID if available
-                const messageId = messageEl.id || `msg-${index}`;
-
-                // Extract any links in the message
-                const links = extractLinks(messageEl);
+                // Extract any links from body only
+                const links = extractLinksFromBody(bodyEl, text);
 
                 // Extract mentions (@username)
                 const mentions = extractMentions(text);
 
                 messages.push({
                   index: index,
-                  messageId: messageId,
                   text: text,
-                  isFromYou: isFromYou,
-                  senderName: senderName,
-                  timestamp: timestamp,
-                  messageType: messageType,
-                  reactions: reactions,
-                  hasReplyButton: hasReplyButton,
+                  sender: isFromYou ? "you" : "prospect",
                   attachments: attachments,
-                  status: status,
-                  links: links,
+                  reactions: reactions,
                   mentions: mentions,
-                  element: {
-                    tagName: messageEl.tagName,
-                    className: messageEl.className,
-                    id: messageEl.id,
-                  },
+                  links: links,
                 });
               } catch (e) {
                 console.warn("Error parsing message element:", e);
@@ -451,17 +475,71 @@ class DOMExtractor {
               return stats;
             }
 
+            // Extract prospect name/title/description
+            let prospectName = "Unknown";
+            let prospectDescription = "";
+            const profileLink = activeConversationThread.querySelector(
+              ".msg-thread__link-to-profile"
+            );
+            if (profileLink) {
+              const fullText = profileLink.textContent.trim();
+              const statusMatch = fullText.match(
+                /Status\s+is\s+(offline|online)/i
+              );
+              if (statusMatch && statusMatch.index !== undefined) {
+                prospectName = fullText.substring(0, statusMatch.index).trim();
+              } else {
+                const nameEl = profileLink.querySelector(
+                  "span[aria-label], .msg-s-profile-card__name, span.msg-s-profile-card__profile-link"
+                );
+                prospectName = (nameEl ? nameEl.textContent : fullText).trim();
+              }
+            }
+
+            // Prefer subtitle div with title attribute for description
+            let subtitleDiv = activeConversationThread.querySelector(
+              ".artdeco-entity-lockup__subtitle div[title]"
+            );
+            if (!subtitleDiv) {
+              subtitleDiv = document.querySelector(
+                ".artdeco-entity-lockup__subtitle div[title]"
+              );
+            }
+            if (subtitleDiv) {
+              const subText = (
+                subtitleDiv.getAttribute("title") ||
+                subtitleDiv.textContent ||
+                ""
+              ).trim();
+              if (subText) {
+                prospectDescription = subText;
+              }
+            }
+
+            // Clean the name and description
+            const clean = (s) =>
+              (s || "")
+                .replace(/Status\s+is\s+\w+/gi, "")
+                .replace(/Available on mobile/gi, "")
+                .replace(/[\n\t]+/g, " ")
+                .replace(/\s{2,}/g, " ")
+                .trim();
+            const cleanTitle = clean(prospectName) || "Unknown";
+            const cleanDescription = clean(prospectDescription);
+
             // Create clean conversation data
             const conversationData = {
               threadId: threadId,
               url: window.location.href,
-              title: document.title,
+              title: cleanTitle,
+              description: cleanDescription,
               timestamp: new Date().toISOString(),
               messageCount: messages.length,
               participants: extractParticipants(messages),
               statistics: calculateStatistics(messages),
               messages: messages,
               fullPageDOM: document.documentElement.outerHTML,
+              activeThreadDOM: activeConversationThread.outerHTML,
             };
 
             return conversationData;
@@ -483,11 +561,43 @@ class DOMExtractor {
           throw new Error(`DOM extraction failed: ${domData.error}`);
         }
 
-        // Create AI payload only
-        const aiPayload = this.createAIPayload(domData);
+        // Generate minimal JSON for download
+        const minimal = JSON.stringify(
+          {
+            threadId: domData.threadId,
+            title: domData.title,
+            description: domData.description,
+            messages: domData.messages,
+          },
+          null,
+          2
+        );
 
-        // Download AI payload
-        await this.downloadJSON(aiPayload, domData.threadId, "ai-payload");
+        // Download raw HTML of the active thread DOM to dom snapshots/
+        if (domData.activeThreadDOM) {
+          await this.downloadHTML(
+            domData.activeThreadDOM,
+            domData.threadId,
+            "thread",
+            true
+          );
+        }
+
+        // Download messages JSON to dom snapshots/
+        await this.downloadJSON(minimal, domData.threadId, "messages");
+
+        // Update lead card in UI using title (name) and description
+        const dataHtml = `
+          <div>Messages: ${domData.messages.length}</div>
+          <div>Last updated: ${new Date(
+            domData.extractedAt || Date.now()
+          ).toLocaleString()}</div>
+        `;
+        this.updateLeadCard({
+          name: domData.title || "—",
+          description: domData.description || "",
+          dataHtml,
+        });
 
         this.setStatus("Success", "DOM extracted and downloaded");
         extractBtn.textContent = "✅ Extracted!";
@@ -512,6 +622,392 @@ class DOMExtractor {
         this.setStatus("Ready", "LinkedIn page detected");
       }, 2000);
     }
+  }
+
+  async generateResponse() {
+    const btn = document.getElementById("generateResponseBtn");
+    const original = btn ? btn.textContent : "";
+    try {
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Generating...";
+      }
+      this.setStatus("Thinking", "Generating suggested reply...");
+      const result = await this.aiService.generateAndInject(
+        this.supabaseService
+      );
+      this.setStatus("Ready", "Response injected. Review and send manually.");
+      if (btn) btn.textContent = "✅ Inserted";
+      setTimeout(() => {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = original || "Generate Response";
+        }
+      }, 2000);
+      return result;
+    } catch (e) {
+      console.error("Generate response failed:", e);
+      this.setStatus("Error", e.message || "Failed to generate response");
+      if (btn) btn.textContent = "❌ Error";
+      setTimeout(() => {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = original || "Generate Response";
+        }
+      }, 2000);
+    }
+  }
+
+  async autoSaveConversationIfNeeded() {
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (
+        !tab ||
+        !tab.url ||
+        !tab.url.includes("linkedin.com/messaging/thread/")
+      )
+        return;
+      const threadId = tab.url.match(/\/thread\/([^\/\?]+)/)?.[1];
+      const now = Date.now();
+      const throttleMs = 30000; // 30s
+      const timeOk = now - this.lastAutoSaveAt > throttleMs;
+      const changed = threadId && threadId !== this.lastThreadId;
+      if (!changed && !timeOk) return;
+
+      const convo = await this.extractConversationFromActiveTab(tab.id);
+      if (convo && !convo.error) {
+        this.addConsoleLog("DB", "Auto-save triggered", { threadId });
+        await this.persistConversation(convo);
+        this.lastThreadId = convo.threadId;
+        this.lastAutoSaveAt = now;
+
+        // Update lead card with proper title and description
+        const prospectTitle = convo.title || "";
+        const prospectDescription = convo.description || "";
+
+        // For the UI, show: Name as title, Description as description
+        const displayName = prospectTitle || "—";
+        const displayDescription =
+          prospectDescription || prospectTitle || "No description available";
+
+        const dataHtml = `
+          <div>Messages: ${convo.messages.length}</div>
+          <div>Last updated: ${new Date(
+            convo.extractedAt || Date.now()
+          ).toLocaleString()}</div>
+        `;
+        this.updateLeadCard({
+          name: displayName,
+          description: displayDescription,
+          dataHtml,
+        });
+        this.setStatus("Synced", `Conversation ${convo.threadId} saved`);
+      }
+    } catch (e) {
+      // Silent fail to avoid noisy UI
+      console.warn("Auto-save failed:", e);
+    }
+  }
+
+  async extractConversationFromActiveTab(tabId) {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        function simpleHash(input) {
+          let h = 2166136261 >>> 0;
+          for (let i = 0; i < input.length; i++) {
+            h ^= input.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+          }
+          return (h >>> 0).toString(16);
+        }
+        const threadId =
+          window.location.href.match(/\/thread\/([^\/\?]+)/)?.[1] || "unknown";
+        const messageForm = document.querySelector(".msg-form");
+        if (!messageForm) return { error: "Message input form not found" };
+        let activeConversationThread = messageForm.closest(
+          ".msg-convo-wrapper.msg-thread"
+        );
+        if (!activeConversationThread) {
+          activeConversationThread = messageForm.closest(
+            "[class*='msg-thread']"
+          );
+        }
+        if (!activeConversationThread)
+          return { error: "Active conversation thread not found" };
+        const messageListContainer = activeConversationThread.querySelector(
+          ".msg-s-message-list"
+        );
+        if (!messageListContainer)
+          return { error: "Message list container not found" };
+        const messageContentList = messageListContainer.querySelector(
+          ".msg-s-message-list-content"
+        );
+        if (!messageContentList)
+          return { error: "Message content list not found" };
+        const messageElements = messageContentList.querySelectorAll(
+          ".msg-s-event-listitem"
+        );
+        const messages = [];
+        messageElements.forEach((messageEl, index) => {
+          try {
+            const textEl = messageEl.querySelector(
+              ".msg-s-event-listitem__body"
+            );
+            const text = textEl ? textEl.textContent.trim() : "";
+            const senderEl = messageEl.querySelector(
+              ".msg-s-event-listitem__sender"
+            );
+            const senderName = senderEl ? senderEl.textContent.trim() : "";
+            // Robust sender detection (outbound = you)
+            const isFromYou =
+              messageEl.classList.contains("msg-s-event-listitem--outbound") ||
+              messageEl.classList.contains("msg-s-event-listitem--self") ||
+              !!messageEl.querySelector(
+                ".msg-s-event-listitem__profile-picture--me, .msg-s-message-group--own"
+              );
+
+            // Attachments
+            const attachments = [];
+            const fileEls = messageEl.querySelectorAll(
+              ".msg-s-event-listitem__attachment"
+            );
+            fileEls.forEach((fileEl) => {
+              attachments.push({
+                type: "file",
+                name:
+                  fileEl.querySelector(".msg-s-event-listitem__attachment-name")
+                    ?.textContent || "",
+                size:
+                  fileEl.querySelector(".msg-s-event-listitem__attachment-size")
+                    ?.textContent || "",
+                fileType:
+                  fileEl.querySelector(".msg-s-event-listitem__attachment-type")
+                    ?.textContent || "",
+              });
+            });
+            const imageEls = messageEl.querySelectorAll(
+              ".msg-s-event-listitem__image img"
+            );
+            imageEls.forEach((imgEl) => {
+              attachments.push({
+                type: "image",
+                src: imgEl.src || "",
+                alt: imgEl.alt || "",
+              });
+            });
+
+            // Reactions
+            const reactions = [];
+            const reactionsEl = messageEl.querySelector(
+              ".msg-reactions-reaction-summary-presenter__container"
+            );
+            if (reactionsEl) {
+              reactionsEl
+                .querySelectorAll(
+                  ".msg-reactions-reaction-summary-presenter__reaction"
+                )
+                .forEach((r) => {
+                  const count = r.querySelector(
+                    ".msg-reactions-reaction-summary-presenter__count"
+                  )?.textContent;
+                  reactions.push({
+                    emoji:
+                      r.querySelector(
+                        ".msg-reactions-reaction-summary-presenter__emoji"
+                      )?.textContent || "",
+                    count: (count && parseInt(count)) || 1,
+                  });
+                });
+            }
+
+            // Links: only anchors inside the body + plain-text URLs; dedupe by URL
+            const links = [];
+            const urlSet = new Set();
+            if (textEl) {
+              textEl.querySelectorAll("a[href]").forEach((a) => {
+                const url = a.getAttribute("href") || "";
+                if (!url || urlSet.has(url)) return;
+                urlSet.add(url);
+                links.push({
+                  url,
+                  text: (a.textContent || "").trim(),
+                  title: a.title || "",
+                });
+              });
+              const urlRegex = /https?:\/\/[^\s)]+/g;
+              let m;
+              while ((m = urlRegex.exec(text)) !== null) {
+                const url = m[0];
+                if (urlSet.has(url)) continue;
+                urlSet.add(url);
+                links.push({ url, text: url, title: "" });
+              }
+            }
+
+            // Mentions
+            const mentions = [];
+            if (text) {
+              const regex = /@(\w+)/g;
+              let m;
+              while ((m = regex.exec(text)) !== null) mentions.push(m[1]);
+            }
+
+            messages.push({
+              index,
+              text,
+              sender: isFromYou ? "you" : "prospect",
+              attachments,
+              reactions,
+              mentions,
+              links,
+            });
+          } catch (e) {}
+        });
+
+        // After messages collected, compute clean lead name and backfill senderName for prospect messages
+        const clean = (s) =>
+          (s || "")
+            .replace(/Status\s+is\s+\w+/gi, "")
+            .replace(/Available on mobile/gi, "")
+            .replace(/[\n\t]+/g, " ")
+            .replace(/\s{2,}/g, " ")
+            .trim();
+        let leadName = "";
+        const profileLinkBackfill = document.querySelector(
+          ".msg-thread__link-to-profile"
+        );
+        if (profileLinkBackfill) {
+          leadName = clean(profileLinkBackfill.textContent || "");
+        }
+        if (leadName) {
+          messages.forEach((m) => {
+            if (m.sender !== "you" && !m.senderName) m.senderName = leadName;
+          });
+        }
+        // Extract prospect name, title, and description from LinkedIn DOM
+        let prospectName = "Unknown";
+        let prospectTitle = "";
+        let prospectDescription = "";
+
+        const profileLink = activeConversationThread.querySelector(
+          ".msg-thread__link-to-profile"
+        );
+
+        if (profileLink) {
+          const fullText = profileLink.textContent.trim();
+
+          // Pattern: "Name Status is offline Title | Description" or "Name Status is online Title"
+          // Step 1: Find and extract the name (everything before "Status")
+          const statusMatch = fullText.match(/Status\s+is\s+(offline|online)/i);
+
+          if (statusMatch && statusMatch.index !== undefined) {
+            // Name is everything before "Status"
+            prospectName = fullText.substring(0, statusMatch.index).trim();
+
+            // Everything after "Status is offline/online" is the title/description
+            const statusEndIndex = statusMatch.index + statusMatch[0].length;
+            const afterStatus = fullText.substring(statusEndIndex).trim();
+
+            if (afterStatus) {
+              // Clean up: remove leading pipes, extra whitespace
+              prospectDescription = afterStatus
+                .replace(/^[|\s\-]+|[|\s\-]+$/g, "")
+                .trim();
+              prospectTitle = prospectDescription;
+            }
+          } else {
+            // No status found - try alternative methods
+            // Try to find name in a child element first
+            const nameElement = profileLink.querySelector(
+              "span[aria-label], .msg-s-profile-card__name, span.msg-s-profile-card__profile-link"
+            );
+
+            if (nameElement) {
+              prospectName = nameElement.textContent.trim();
+              // Get description from headline element or remaining text
+              const headlineEl = activeConversationThread.querySelector(
+                ".msg-s-profile-card__headline, .msg-thread__headline"
+              );
+              if (headlineEl) {
+                prospectDescription = headlineEl.textContent.trim();
+                prospectTitle = prospectDescription;
+              }
+            } else {
+              // Fallback: assume full text is name if no status found
+              prospectName = fullText;
+            }
+          }
+
+          // Try to find headline in separate element (overrides if found)
+          const headlineEl = activeConversationThread.querySelector(
+            '.msg-s-profile-card__headline, .msg-thread__headline, [data-test-id="headline"]'
+          );
+          if (headlineEl && headlineEl.textContent.trim()) {
+            prospectTitle = headlineEl.textContent.trim();
+            prospectDescription = prospectTitle;
+          }
+
+          // Stronger selector: LinkedIn profile card subtitle with title attribute
+          // Example seen in DOM snapshots: div#ember661.artdeco-entity-lockup__subtitle > div[title]
+          const subtitleDiv = activeConversationThread.querySelector(
+            ".artdeco-entity-lockup__subtitle div[title]"
+          );
+          if (subtitleDiv) {
+            const subText = (
+              subtitleDiv.getAttribute("title") ||
+              subtitleDiv.textContent ||
+              ""
+            ).trim();
+            if (subText) {
+              prospectDescription = subText;
+              prospectTitle = subText;
+            }
+          }
+        }
+
+        // Clean name strictly (remove status/mobile) and collapse whitespace (reuse clean from above)
+        const cleanName =
+          clean(prospectName || prospectTitle || "Unknown") || "Unknown";
+        const cleanDescription = clean(prospectDescription || "");
+
+        return {
+          threadId,
+          title: cleanName,
+          description: cleanDescription,
+          messages,
+          url: window.location.href,
+          extractedAt: new Date().toISOString(),
+        };
+      },
+    });
+    return results && results[0] && results[0].result
+      ? results[0].result
+      : { error: "No result" };
+  }
+
+  async persistConversation(conversationData) {
+    // Save locally
+    const storageKey = `linkedin_conversation_${conversationData.threadId}`;
+    const savedData = {
+      ...conversationData,
+      savedAt: new Date().toISOString(),
+    };
+    this.addConsoleLog("LOCAL", "Saved to chrome.storage", {
+      threadId: conversationData.threadId,
+    });
+    await chrome.storage.local.set({ [storageKey]: savedData });
+    // Save to Supabase
+    this.addConsoleLog("DB", "Writing to Supabase", {
+      threadId: conversationData.threadId,
+    });
+    await this.supabaseService.saveConversation(conversationData);
+    this.addConsoleLog("DB", "Write complete", {
+      threadId: conversationData.threadId,
+    });
   }
 
   downloadConversationJSON(conversationData) {
@@ -610,6 +1106,39 @@ class DOMExtractor {
     }
   }
 
+  async testSupabaseConnection() {
+    const testBtn = document.getElementById("testSupabaseBtn");
+    const originalText = testBtn.textContent;
+
+    try {
+      testBtn.disabled = true;
+      testBtn.textContent = "Testing...";
+      this.setStatus("Testing", "Testing Supabase connection...");
+
+      const isConnected = await this.supabaseService.testConnection();
+
+      if (isConnected) {
+        this.setStatus("Success", "Supabase connection successful!");
+        testBtn.textContent = "✅ Connected";
+      } else {
+        this.setStatus(
+          "Error",
+          "Supabase connection failed. Check console for details."
+        );
+        testBtn.textContent = "❌ Failed";
+      }
+    } catch (error) {
+      console.error("Supabase test error:", error);
+      this.setStatus("Error", `Connection test failed: ${error.message}`);
+      testBtn.textContent = "❌ Error";
+    } finally {
+      setTimeout(() => {
+        testBtn.disabled = false;
+        testBtn.textContent = originalText;
+      }, 3000);
+    }
+  }
+
   async saveToFirebase() {
     const saveBtn = document.getElementById("saveToFirebaseBtn");
     const originalText = saveBtn.textContent;
@@ -691,30 +1220,6 @@ class DOMExtractor {
               );
               const senderName = senderEl ? senderEl.textContent.trim() : "";
 
-              // Extract timestamp - try multiple selectors
-              let timestamp = "";
-              const timestampEl = messageEl.querySelector(
-                ".msg-s-event-listitem__timestamp"
-              );
-              if (timestampEl) {
-                timestamp = timestampEl.textContent.trim();
-              } else {
-                // Fallback: try to get timestamp from data attributes or other elements
-                const timeEl = messageEl.querySelector("time");
-                if (timeEl) {
-                  timestamp =
-                    timeEl.getAttribute("datetime") ||
-                    timeEl.textContent.trim();
-                }
-              }
-
-              // Extract actual timestamp from LinkedIn's data attributes
-              let actualTimestamp = "";
-              const timeElement = messageEl.querySelector("time");
-              if (timeElement) {
-                actualTimestamp = timeElement.getAttribute("datetime") || "";
-              }
-
               const isFromYou = messageEl.classList.contains(
                 "msg-s-event-listitem--outbound"
               );
@@ -723,9 +1228,7 @@ class DOMExtractor {
                 localIndex: index, // Index within current extraction
                 text: text,
                 sender: isFromYou ? "you" : "prospect",
-                senderName: senderName,
-                timestamp: timestamp, // Display timestamp
-                actualTimestamp: actualTimestamp, // ISO timestamp for sorting
+                senderName: isFromYou ? "You" : senderName || "",
                 extractedAt: new Date().toISOString(),
                 isFromYou: isFromYou,
               });
@@ -734,17 +1237,93 @@ class DOMExtractor {
             }
           });
 
-          // Extract prospect name
-          const prospectNameEl = activeConversationThread.querySelector(
+          // Extract prospect name, title, and description properly
+          let prospectName = "Unknown";
+          let prospectTitle = "";
+          let prospectDescription = "";
+
+          const profileLink = activeConversationThread.querySelector(
             ".msg-thread__link-to-profile"
           );
-          const prospectName = prospectNameEl
-            ? prospectNameEl.textContent.trim()
-            : "Unknown";
+
+          if (profileLink) {
+            const fullText = profileLink.textContent.trim();
+
+            // Pattern: "Name Status is offline Title | Description"
+            // Step 1: Find "Status is offline/online" pattern
+            const statusMatch = fullText.match(
+              /Status\s+is\s+(offline|online)/i
+            );
+
+            if (statusMatch && statusMatch.index !== undefined) {
+              // Name is everything before "Status"
+              prospectName = fullText.substring(0, statusMatch.index).trim();
+
+              // Everything after "Status is offline/online" is the title/description
+              const statusEndIndex = statusMatch.index + statusMatch[0].length;
+              const afterStatus = fullText.substring(statusEndIndex).trim();
+
+              if (afterStatus) {
+                // Clean up: remove leading pipes, dashes, extra whitespace
+                prospectDescription = afterStatus
+                  .replace(/^[|\s\-]+|[|\s\-]+$/g, "")
+                  .trim();
+                prospectTitle = prospectDescription;
+              }
+            } else {
+              // No status found - try alternative methods
+              const nameElement = profileLink.querySelector(
+                "span[aria-label], .msg-s-profile-card__name, span.msg-s-profile-card__profile-link"
+              );
+
+              if (nameElement) {
+                prospectName = nameElement.textContent.trim();
+              } else {
+                prospectName = fullText;
+              }
+            }
+
+            // Try to find headline in separate element (this overrides if found)
+            const headlineEl2 = activeConversationThread.querySelector(
+              '.msg-s-profile-card__headline, .msg-thread__headline, [data-test-id="headline"]'
+            );
+            if (headlineEl2 && headlineEl2.textContent.trim()) {
+              prospectTitle = headlineEl2.textContent.trim();
+              prospectDescription = prospectTitle;
+            }
+
+            // Stronger selector: profile card subtitle with title attribute
+            const subtitleDiv2 = activeConversationThread.querySelector(
+              ".artdeco-entity-lockup__subtitle div[title]"
+            );
+            if (subtitleDiv2) {
+              const subText2 = (
+                subtitleDiv2.getAttribute("title") ||
+                subtitleDiv2.textContent ||
+                ""
+              ).trim();
+              if (subText2) {
+                prospectDescription = subText2;
+                prospectTitle = subText2;
+              }
+            }
+          }
+
+          // Clean title strictly to the name (remove status fragments and collapse whitespace)
+          const cleanName = (prospectTitle || prospectName || "Unknown")
+            .replace(/Status\s+is\s+\w+/gi, "")
+            .replace(/Available on mobile/gi, "")
+            .replace(/[\n\t]+/g, " ")
+            .replace(/\s{2,}/g, " ")
+            .trim();
 
           return {
             threadId: threadId,
-            prospectName: prospectName,
+            title: cleanName || "Unknown",
+            description: (prospectDescription || "")
+              .replace(/[\n\t]+/g, " ")
+              .replace(/\s{2,}/g, " ")
+              .trim(),
             messages: messages,
             url: window.location.href,
             extractedAt: new Date().toISOString(),
@@ -776,6 +1355,9 @@ class DOMExtractor {
         const threadId = await this.supabaseService.saveConversation(
           conversationData
         );
+
+        // Download JSON file (additional backup)
+        this.downloadConversationJSON(savedData);
 
         this.setStatus(
           "Success",
@@ -1025,7 +1607,9 @@ class DOMExtractor {
     // AI payload with essential fields
     const aiPayload = {
       threadId: domData.threadId,
-      prospectName: domData.participants.find((p) => p !== "You") || "Unknown",
+      url: domData.url,
+      title: domData.title || "",
+      description: domData.description || "",
       messages: essentialMessages,
     };
 
@@ -1075,579 +1659,36 @@ class DOMExtractor {
 
   async downloadJSON(jsonContent, threadId, type = "full") {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `linkedin-conversation-${
+    const base = `linkedin-conversation-${
       threadId || "unknown"
-    }-${type}-${timestamp}.json`;
+    }-${type}-${timestamp}`;
+    const filename = `dom snapshots/${base}.json`;
 
     const blob = new Blob([jsonContent], { type: "application/json" });
     const url_blob = URL.createObjectURL(blob);
 
     await chrome.downloads.download({
       url: url_blob,
-      filename: filename,
-      saveAs: true,
+      filename,
+      saveAs: false,
     });
   }
 
-  async loadCurrentConversation() {
-    try {
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
-
-      console.log("Loading conversation for tab:", tab.url);
-
-      if (!tab.url || !tab.url.includes("linkedin.com/messaging")) {
-        console.log("Not on LinkedIn messaging page");
-        this.hideLeadInfo();
-        return;
-      }
-
-      // Extract thread ID from URL
-      const threadId = tab.url.match(/\/thread\/([^\/\?]+)/)?.[1];
-      console.log("Extracted thread ID:", threadId);
-
-      if (!threadId) {
-        console.log("No thread ID found in URL");
-        this.hideLeadInfo();
-        return;
-      }
-
-      // Update current thread ID
-      this.currentThreadId = threadId;
-
-      // First check Supabase (saved to database)
-      const conversationData = await this.supabaseService.getConversation(
-        threadId
-      );
-      if (conversationData) {
-        console.log("Found conversation in Supabase");
-        conversationData._fromLocalStorage = false;
-        this.displayLeadInfo(conversationData);
-        return;
-      }
-
-      // Try localStorage (saved but not synced)
-      const storageKey = `linkedin_conversation_${threadId}`;
-      const storedData = await chrome.storage.local.get(storageKey);
-
-      if (storedData[storageKey]) {
-        console.log("Found conversation in localStorage");
-        const data = storedData[storageKey];
-        data._fromLocalStorage = true;
-        this.displayLeadInfo(data);
-      } else {
-        console.log("Conversation not found");
-        this.hideLeadInfo();
-      }
-    } catch (error) {
-      console.error("Error loading current conversation:", error);
-    }
-  }
-
-  displayLeadInfo(conversationData) {
-    console.log("Displaying lead info with data:", conversationData);
-
-    const leadInfoDiv = document.getElementById("leadInfo");
-    if (!leadInfoDiv) return;
-
-    // Show the lead info section
-    leadInfoDiv.style.display = "block";
-
-    // Parse lead name and description - check both prospectName and title fields
-    const fullText =
-      conversationData.prospectName || conversationData.title || "";
-    console.log("Full prospect name text:", fullText);
-
-    let displayName = "Unknown Lead";
-    let description = "Prospect";
-
-    if (fullText && fullText !== "Unknown") {
-      // Common pattern: "Name Status is offline Student at School"
-      // Extract just the name (first part before "Status" or "Student")
-      const parts = fullText.split(/\s+(?:Status|Student)\s+/);
-      displayName = parts[0].trim();
-      console.log("Extracted display name:", displayName);
-
-      // Extract description/school info
-      if (fullText.includes("Student at")) {
-        const schoolMatch = fullText.match(/Student at (.+)/);
-        if (schoolMatch && schoolMatch[1]) {
-          description = `Student at ${schoolMatch[1].trim()}`;
-        } else {
-          description = "Student";
-        }
-        console.log("Extracted description:", description);
-      } else if (fullText.includes("at")) {
-        // Handle other "at" patterns
-        const atMatch = fullText.match(/at (.+)/);
-        if (atMatch && atMatch[1]) {
-          description = atMatch[1].trim();
-        }
-      }
-    } else {
-      console.log("No prospect name found, using defaults");
-    }
-
-    // Display lead name
-    const leadName = document.getElementById("leadName");
-    if (leadName) {
-      leadName.textContent = displayName;
-    }
-
-    // Display lead description
-    const leadDescription = document.getElementById("leadDescription");
-    if (leadDescription) {
-      leadDescription.textContent = description;
-    }
-
-    // Display status based on data source
-    const leadStatus = document.getElementById("leadStatus");
-    if (leadStatus) {
-      if (conversationData._fromLocalStorage === true) {
-        // Only in localStorage, not synced to database
-        leadStatus.textContent = "Not Stored";
-        leadStatus.style.background = "#dc3545"; // Red for not stored
-      } else if (conversationData._fromLocalStorage === false) {
-        // From Supabase database
-        leadStatus.textContent = "Database Data";
-        leadStatus.style.background = "#28a745"; // Green for database
-      } else if (conversationData._dataSource === "dom") {
-        // Fresh from DOM
-        leadStatus.textContent = "DOM Data";
-        leadStatus.style.background = "#ffc107"; // Yellow for DOM
-      } else {
-        // Fresh from DOM, not saved anywhere
-        leadStatus.textContent = "DOM Data";
-        leadStatus.style.background = "#ffc107"; // Yellow for DOM
-      }
-    }
-
-    // Display message count
-    const messageCount = document.getElementById("messageCount");
-    if (messageCount && conversationData.messages) {
-      messageCount.textContent = conversationData.messages.length;
-    }
-
-    // Display last message time
-    const lastMessageTime = document.getElementById("lastMessageTime");
-    if (lastMessageTime) {
-      const lastMessage =
-        conversationData.messages?.[conversationData.messages.length - 1];
-      if (lastMessage && lastMessage.timestamp) {
-        lastMessageTime.textContent = lastMessage.timestamp;
-      } else if (lastMessage && lastMessage.actualTimestamp) {
-        // Format ISO timestamp
-        const date = new Date(lastMessage.actualTimestamp);
-        lastMessageTime.textContent = date.toLocaleTimeString();
-      } else {
-        lastMessageTime.textContent = "Just now";
-      }
-    }
-
-    // Display last message preview
-    const lastMessagePreview = document.getElementById("lastMessagePreview");
-    if (lastMessagePreview && conversationData.messages) {
-      const lastMessage =
-        conversationData.messages[conversationData.messages.length - 1];
-      if (lastMessage && lastMessage.text) {
-        const preview = lastMessage.text.substring(0, 100);
-        lastMessagePreview.textContent = preview;
-      } else {
-        lastMessagePreview.textContent = "No messages yet";
-      }
-    }
-  }
-
-  async autoSaveConversation(tabId, threadId) {
-    try {
-      // Check if already saved
-      const existingData = await this.supabaseService.getConversation(threadId);
-      if (existingData) {
-        console.log("Conversation already exists in database");
-        return;
-      }
-
-      console.log("Auto-saving conversation:", threadId);
-
-      // Extract conversation data from DOM
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        func: () => {
-          try {
-            // Get thread ID
-            const threadId =
-              window.location.href.match(/\/thread\/([^\/\?]+)/)?.[1] ||
-              "unknown";
-
-            // Find the message input form
-            const messageForm = document.querySelector(".msg-form");
-            if (!messageForm) {
-              return { error: "Message input form not found" };
-            }
-
-            // Work backwards from the input form
-            let activeConversationThread = messageForm.closest(
-              ".msg-convo-wrapper.msg-thread"
-            );
-            if (!activeConversationThread) {
-              activeConversationThread = messageForm.closest(
-                "[class*='msg-thread']"
-              );
-            }
-
-            if (!activeConversationThread) {
-              return { error: "Active conversation thread not found" };
-            }
-
-            // Find message list
-            const messageListContainer = activeConversationThread.querySelector(
-              ".msg-s-message-list"
-            );
-            if (!messageListContainer) {
-              return { error: "Message list container not found" };
-            }
-
-            const messageContentList = messageListContainer.querySelector(
-              ".msg-s-message-list-content"
-            );
-            if (!messageContentList) {
-              return { error: "Message content list not found" };
-            }
-
-            // Extract individual messages
-            const messageElements = messageContentList.querySelectorAll(
-              ".msg-s-event-listitem"
-            );
-
-            const messages = [];
-            messageElements.forEach((messageEl, index) => {
-              try {
-                // Get message text
-                const bodyEl = messageEl.querySelector(
-                  ".msg-s-event-listitem__body"
-                );
-                const text = bodyEl ? bodyEl.textContent.trim() : "";
-
-                if (!text) return; // Skip empty messages
-
-                // Determine sender (you vs them)
-                const isFromYou = !messageEl.classList.contains(
-                  "msg-s-event-listitem--other"
-                );
-
-                // Get timestamp
-                const timeEl = messageEl.querySelector(
-                  ".msg-s-message-list__time-heading"
-                );
-                const timestamp = timeEl ? timeEl.textContent.trim() : "";
-
-                // Get sender name from profile info
-                const profileEl = messageEl.querySelector(
-                  ".msg-s-event-listitem__profile-picture"
-                );
-                const senderName = profileEl
-                  ? (
-                      profileEl.getAttribute("alt") ||
-                      profileEl.getAttribute("title") ||
-                      ""
-                    ).replace(" Profile", "")
-                  : "";
-
-                messages.push({
-                  localIndex: index,
-                  text: text,
-                  sender: isFromYou ? "you" : "prospect",
-                  senderName: senderName,
-                  timestamp: timestamp,
-                  extractedAt: new Date().toISOString(),
-                  isFromYou: isFromYou,
-                });
-              } catch (e) {
-                console.warn("Error parsing message element:", e);
-              }
-            });
-
-            // Extract prospect name
-            const prospectNameEl = activeConversationThread.querySelector(
-              ".msg-thread__link-to-profile"
-            );
-            const prospectName = prospectNameEl
-              ? prospectNameEl.textContent.trim()
-              : "Unknown";
-
-            return {
-              threadId: threadId,
-              prospectName: prospectName,
-              messages: messages,
-              url: window.location.href,
-              extractedAt: new Date().toISOString(),
-            };
-          } catch (e) {
-            console.error("Extraction error:", e);
-            return { error: e.message };
-          }
-        },
-      });
-
-      if (
-        results &&
-        results[0] &&
-        results[0].result &&
-        !results[0].result.error
-      ) {
-        const conversationData = results[0].result;
-
-        // Mark as DOM data for immediate display
-        conversationData._dataSource = "dom";
-        conversationData._fromLocalStorage = false;
-        this.displayLeadInfo(conversationData);
-
-        // Save locally first
-        const storageKey = `linkedin_conversation_${threadId}`;
-        await chrome.storage.local.set({
-          [storageKey]: conversationData,
-        });
-
-        // Save to Supabase
-        console.log("💾 Saving conversation to Supabase...");
-        await this.supabaseService.saveConversation(conversationData);
-        console.log("✅ Auto-saved conversation:", threadId);
-
-        // AUTO-GENERATE RESPONSE after saving
-        console.log("🚀🚀🚀 TRIGGERING AUTO-GENERATION NOW 🚀🚀🚀");
-        console.log("🚀 Thread ID:", threadId);
-        console.log(
-          "🚀 Conversation has",
-          conversationData.messages?.length || 0,
-          "messages"
-        );
-        this.setStatus("Auto-generating", "Generating AI response...");
-
-        // Use the conversation data we just saved instead of fetching again
-        conversationData._fromLocalStorage = false;
-
-        // TRY to auto-generate, but don't block if it fails
-        console.log("🚀 About to call autoGenerateResponseWithData");
-        await this.autoGenerateResponseWithData(conversationData, threadId);
-        console.log("🚀 Finished auto-generate call");
-      }
-    } catch (error) {
-      console.error("Error auto-saving conversation:", error);
-    }
-  }
-
-  async monitorUrlChanges() {
-    // Check for URL changes every second
-    setInterval(async () => {
-      try {
-        const [tab] = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        });
-
-        if (!tab.url || !tab.url.includes("linkedin.com/messaging")) {
-          if (this.currentThreadId) {
-            this.hideLeadInfo();
-            this.currentThreadId = null;
-          }
-          return;
-        }
-
-        // Extract thread ID from current URL
-        const threadId = tab.url.match(/\/thread\/([^\/\?]+)/)?.[1];
-
-        // If thread ID changed, reload the conversation and auto-save
-        if (threadId && threadId !== this.currentThreadId) {
-          console.log("Thread changed:", this.currentThreadId, "->", threadId);
-          this.currentThreadId = threadId;
-
-          // First show DOM data immediately
-          await this.loadCurrentConversation();
-
-          // Then auto-save and update with database data
-          await this.autoSaveConversation(tab.id, threadId);
-
-          // Reload with database data after save
-          await this.loadCurrentConversation();
-        } else if (!threadId && this.currentThreadId) {
-          // If not in a messaging thread anymore, hide the lead info
-          this.hideLeadInfo();
-          this.currentThreadId = null;
-        }
-      } catch (error) {
-        console.error("Error monitoring URL changes:", error);
-      }
-    }, 1000); // Check every second
-  }
-
-  hideLeadInfo() {
-    const leadInfoDiv = document.getElementById("leadInfo");
-    if (leadInfoDiv) {
-      leadInfoDiv.style.display = "none";
-    }
-  }
-
-  async autoGenerateResponseWithData(conversationData, threadId) {
-    // Auto-generate response when conversation is saved/updated
-    console.log("🚨🚨🚨 autoGenerateResponseWithData CALLED 🚨🚨🚨");
-    console.log("🚨 Thread ID:", threadId);
-    console.log("🚨 Has AIService?", !!this.aiService);
-    console.log("🚨 AIService URL:", this.aiService?.baseUrl);
-
-    try {
-      console.log("🎯 Auto-generating AI response for thread:", threadId);
-
-      // Check if AI service is available
-      console.log("🔍 Checking AI service health...");
-      console.log("🔍 AI base URL:", this.aiService.baseUrl);
-      const isHealthy = await this.aiService.checkHealth();
-      console.log("🔍 AI service health result:", isHealthy);
-
-      if (!isHealthy) {
-        console.log("⚠️ AI service not available, skipping auto-generation");
-        console.log(
-          "💡 To enable auto-generation, start: cd ai_module && python main.py"
-        );
-        this.setStatus(
-          "Info",
-          "AI not running - start: cd ai_module && python main.py"
-        );
-        return;
-      }
-
-      console.log("✓ AI service is healthy, proceeding with generation");
-
-      if (!conversationData || !conversationData.messages) {
-        console.log("⚠️ No conversation data, skipping");
-        return;
-      }
-
-      console.log("✓ Got conversation data, generating response...");
-
-      // Generate response
-      console.log("📞 Calling AI service to generate response...");
-      const aiResult = await this.aiService.generateResponse(
-        conversationData,
-        conversationData.prospectName
-      );
-
-      console.log("✅ Generated response:", aiResult.response);
-      console.log("✅ Response phase:", aiResult.phase);
-
-      // Find the LinkedIn tab (the actual messaging page, not the popup)
-      const tabs = await chrome.tabs.query({});
-      const linkedinTab = tabs.find(
-        (tab) =>
-          tab.url &&
-          tab.url.includes(`/thread/${threadId}`) &&
-          tab.url.includes("linkedin.com/messaging")
-      );
-
-      if (linkedinTab) {
-        console.log("✓ Found LinkedIn tab, injecting response...");
-        await this.aiService.injectResponse(aiResult.response, linkedinTab.id);
-        console.log(
-          "✅ Auto-generated and injected response:",
-          aiResult.response
-        );
-        this.setStatus("Success", `Response ready! Phase: ${aiResult.phase}`);
-
-        // Show regenerate button
-        const regenerateBtn = document.getElementById("regenerateBtn");
-        if (regenerateBtn) {
-          regenerateBtn.style.display = "block";
-          regenerateBtn.textContent = "🔄 Regenerate";
-        }
-      } else {
-        console.log("⚠️ Could not find LinkedIn messaging tab");
-        this.setStatus(
-          "Success",
-          `Response generated: ${aiResult.response.substring(0, 50)}...`
-        );
-      }
-    } catch (error) {
-      console.error("❌ Error in auto-generate:", error);
-      console.error("Error stack:", error.stack);
-      // Don't show error to user in auto-mode, just log it
-    }
-  }
-
-  async autoGenerateResponse(threadId) {
-    // Get conversation from Supabase
-    const conversationData = await this.supabaseService.getConversation(
-      threadId
-    );
-    await this.autoGenerateResponseWithData(conversationData, threadId);
-  }
-
-  async generateAIResponse() {
-    const generateBtn = document.getElementById("generateResponseBtn");
-    const originalText = generateBtn.textContent;
-
-    try {
-      generateBtn.disabled = true;
-      generateBtn.textContent = "Generating...";
-      this.setStatus("Generating", "Calling AI service...");
-
-      // Check if AI service is available
-      const isHealthy = await this.aiService.checkHealth();
-      if (!isHealthy) {
-        throw new Error(
-          "AI service is not available. Make sure Python server is running on http://127.0.0.1:5000"
-        );
-      }
-
-      // Generate and inject response
-      const result = await this.aiService.generateAndInject(
-        this.supabaseService
-      );
-
-      // Show phase emoji
-      const phaseEmoji = result.phase === "doing_the_ask" ? "💰" : "🤝";
-
-      this.setStatus(
-        "Success",
-        `Response generated! ${phaseEmoji} Phase: ${result.phase}`
-      );
-      generateBtn.textContent = "✅ Generated!";
-
-      // Security reminder
-      console.log(
-        "🔒 SECURITY: Response ready for review. Manual send required."
-      );
-
-      // Show regenerate button
-      const regenerateBtn = document.getElementById("regenerateBtn");
-      if (regenerateBtn) {
-        regenerateBtn.style.display = "block";
-        regenerateBtn.textContent = "🔄 Regenerate";
-      }
-
-      // Show reasoning in info div
-      const infoDiv = document.querySelector(".info");
-      if (infoDiv) {
-        infoDiv.innerHTML = `💡 ${result.reasoning || "Response ready"} (${
-          result.response.length
-        } chars) | Phase: ${result.phase}`;
-      }
-    } catch (error) {
-      console.error("Error generating AI response:", error);
-      this.setStatus("Error", error.message);
-      generateBtn.textContent = "❌ Error";
-
-      // Show error details
-      const infoDiv = document.querySelector(".info");
-      if (infoDiv) {
-        infoDiv.innerHTML = `❌ ${error.message}`;
-      }
-    } finally {
-      setTimeout(() => {
-        generateBtn.textContent = "🤖 Generate Response";
-        generateBtn.disabled = false;
-      }, 3000);
-    }
+  async downloadHTML(htmlContent, threadId, type = "thread") {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const base = `linkedin-conversation-${
+      threadId || "unknown"
+    }-${type}-${timestamp}`;
+    const filename = `dom snapshots/${base}.html`;
+
+    const blob = new Blob([htmlContent], { type: "text/html" });
+    const url_blob = URL.createObjectURL(blob);
+
+    await chrome.downloads.download({
+      url: url_blob,
+      filename,
+      saveAs: false,
+    });
   }
 }
 

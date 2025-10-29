@@ -53,66 +53,27 @@ The extension extracts conversation data in this JSON format:
 
 ## Privacy & Security
 
-- **Local AI**: AI service runs on your local machine
-- **Database**: Conversations stored in your Supabase database
-- **Manual Send**: All responses require manual review and send
-- **No Auto-Posting**: Extension never automatically sends messages
-- **API Keys**: Stored locally in Python environment, never exposed to extension
+- **Local only**: All data processing happens locally in your browser
+- **No external calls**: Extension doesn't make any API calls or send data anywhere
+- **Clipboard only**: Data is only copied to your local clipboard
+- **No storage**: No conversation data is permanently stored by the extension
 
 ## Development
 
 The extension consists of:
 
 - `manifest.json` - Extension configuration (Manifest V3)
-- `background.js` - Background service worker
+- `content.js` - Main extraction logic that runs on LinkedIn pages
 - `popup.html` - Extension popup UI
 - `popup.js` - Popup functionality and status management
-- `supabase-config.js` - Supabase configuration
-- `supabase-service.js` - Database operations
-- `ai-service.js` - AI API integration
-- `ai_module/` - Python AI service (separate README)
 
-## AI Module (NEW!)
+## Next Steps
 
-This extension now includes an AI module for generating intelligent sales responses.
+This extension provides the message extraction foundation. The next phase would be to build:
 
-### Quick Start
-
-1. **Install Python dependencies:**
-
-```bash
-cd ai_module
-pip install -r requirements.txt
-```
-
-2. **Configure OpenAI API key:**
-   Create `.env` file in `ai_module/` directory:
-
-```
-OPENAI_API_KEY=your_key_here
-```
-
-3. **Test the AI (recommended):**
-
-```bash
-python test_sales_simulator.py
-```
-
-You'll role-play as a prospect while the AI tries to sell you Prodicity!
-
-4. **Start the AI service:**
-
-```bash
-python main.py
-```
-
-5. **Use in extension:**
-
-- Open LinkedIn conversation
-- Click "🤖 Generate Response" button
-- AI fills the input field (review and send manually)
-
-See `ai_module/README.md` for complete setup and API documentation.
+1. **AI Response Generator**: Python script that takes extracted JSON and generates response suggestions
+2. **Auto-fill Integration**: Automatically fill LinkedIn message boxes with AI-generated responses
+3. **Knowledge Base Integration**: Include Prodicity-specific context for better responses
 
 ## Troubleshooting
 

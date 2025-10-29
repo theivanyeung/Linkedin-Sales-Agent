@@ -5,18 +5,13 @@
   "description": "AI-powered LinkedIn sales co-pilot for Prodicity",
   "permissions": [
     "activeTab",
-    "tabs",
     "downloads",
     "scripting",
     "sidePanel",
     "notifications",
     "storage"
   ],
-  "host_permissions": [
-    "https://www.linkedin.com/*",
-    "http://127.0.0.1:5000/*",
-    "http://localhost:5000/*"
-  ],
+  "host_permissions": ["https://www.linkedin.com/*"],
   "action": {
     "default_title": "LinkedIn Sales Agent"
   },

@@ -1,0 +1,48 @@
+[33mcommit 95fb7b9263548106404304695e0a0a71f99b95e3[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: Ivan Yeung <yeungivan09@gmail.com>
+Date:   Wed Oct 29 09:57:54 2025 -0700
+
+    implemented ai module
+
+[33mcommit 8a3a05257079a12ef5b57885865b400bbb29e0d7[m
+Author: Ivan Yeung <yeungivan09@gmail.com>
+Date:   Sun Oct 26 21:11:49 2025 -0700
+
+    finished static backend system
+
+[33mcommit ece79d75b985a6d78ad48e114c5ac52fdd388df4[m
+Author: Ivan Yeung <yeungivan09@gmail.com>
+Date:   Fri Oct 24 23:08:06 2025 -0700
+
+    integrate firebase
+
+[33mcommit 02f0344d1e85087e98b56e815f18b981e36dae9e[m
+Author: Ivan Yeung <yeungivan09@gmail.com>
+Date:   Wed Oct 22 20:35:01 2025 -0700
+
+    updated to extract conversation and display as json data
+
+[33mcommit 618ddc0083ae1426dec976ff733219d11324bd55[m
+Author: Ivan Yeung <yeungivan09@gmail.com>
+Date:   Wed Oct 22 10:10:01 2025 -0700
+
+    fixed favicon error
+
+[33mcommit 2fe9a48727a8aa78f93b6787840eab1097dc7450[m
+Merge: 3dd2d1f 6be4d4d
+Author: Ivan Yeung <yeungivan09@gmail.com>
+Date:   Wed Oct 22 09:52:40 2025 -0700
+
+    initial extension
+
+[33mcommit 3dd2d1f18f5b9cf1bd77d3f180920a4a4472c783[m
+Author: Ivan Yeung <yeungivan09@gmail.com>
+Date:   Wed Oct 22 09:46:39 2025 -0700
+
+    initial extension
+
+[33mcommit 6be4d4d888a91225843ac728eea5b8d2c386cab1[m
+Author: Ivan Yeung <58407773+theivanyeung@users.noreply.github.com>
+Date:   Wed Oct 22 09:20:52 2025 -0700
+
+    Initial commit

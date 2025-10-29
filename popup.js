@@ -2,12 +2,16 @@
 class DOMExtractor {
   constructor() {
     this.supabaseService = new SupabaseService();
+    this.currentThreadId = null;
     this.init();
   }
 
   init() {
+    this.aiService = new AIService();
     this.setupEventListeners();
     this.checkPageStatus();
+    this.loadCurrentConversation();
+    this.monitorUrlChanges();
   }
 
   setupEventListeners() {
@@ -15,15 +19,18 @@ class DOMExtractor {
       this.extractDOM();
     });
 
-    document.getElementById("testInputBtn").addEventListener("click", () => {
-      this.testMessageInput();
-    });
-
     document
-      .getElementById("saveToFirebaseBtn")
+      .getElementById("generateResponseBtn")
       .addEventListener("click", () => {
-        this.saveToFirebase();
+        this.generateAIResponse();
       });
+
+    const regenerateBtn = document.getElementById("regenerateBtn");
+    if (regenerateBtn) {
+      regenerateBtn.addEventListener("click", () => {
+        this.generateAIResponse();
+      });
+    }
   }
 
   async checkPageStatus() {
@@ -34,7 +41,10 @@ class DOMExtractor {
       });
 
       if (tab.url && tab.url.includes("linkedin.com")) {
-        this.setStatus("Ready", "LinkedIn page detected");
+        // Don't overwrite status during auto-extraction
+        if (!tab.url.includes("linkedin.com/messaging")) {
+          this.setStatus("Ready", "LinkedIn page detected");
+        }
         document.getElementById("extractBtn").disabled = false;
       } else {
         this.setStatus("Inactive", "Navigate to a LinkedIn page");
@@ -1077,6 +1087,567 @@ class DOMExtractor {
       filename: filename,
       saveAs: true,
     });
+  }
+
+  async loadCurrentConversation() {
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      console.log("Loading conversation for tab:", tab.url);
+
+      if (!tab.url || !tab.url.includes("linkedin.com/messaging")) {
+        console.log("Not on LinkedIn messaging page");
+        this.hideLeadInfo();
+        return;
+      }
+
+      // Extract thread ID from URL
+      const threadId = tab.url.match(/\/thread\/([^\/\?]+)/)?.[1];
+      console.log("Extracted thread ID:", threadId);
+
+      if (!threadId) {
+        console.log("No thread ID found in URL");
+        this.hideLeadInfo();
+        return;
+      }
+
+      // Update current thread ID
+      this.currentThreadId = threadId;
+
+      // First check Supabase (saved to database)
+      const conversationData = await this.supabaseService.getConversation(
+        threadId
+      );
+      if (conversationData) {
+        console.log("Found conversation in Supabase");
+        conversationData._fromLocalStorage = false;
+        this.displayLeadInfo(conversationData);
+        return;
+      }
+
+      // Try localStorage (saved but not synced)
+      const storageKey = `linkedin_conversation_${threadId}`;
+      const storedData = await chrome.storage.local.get(storageKey);
+
+      if (storedData[storageKey]) {
+        console.log("Found conversation in localStorage");
+        const data = storedData[storageKey];
+        data._fromLocalStorage = true;
+        this.displayLeadInfo(data);
+      } else {
+        console.log("Conversation not found");
+        this.hideLeadInfo();
+      }
+    } catch (error) {
+      console.error("Error loading current conversation:", error);
+    }
+  }
+
+  displayLeadInfo(conversationData) {
+    console.log("Displaying lead info with data:", conversationData);
+
+    const leadInfoDiv = document.getElementById("leadInfo");
+    if (!leadInfoDiv) return;
+
+    // Show the lead info section
+    leadInfoDiv.style.display = "block";
+
+    // Parse lead name and description - check both prospectName and title fields
+    const fullText =
+      conversationData.prospectName || conversationData.title || "";
+    console.log("Full prospect name text:", fullText);
+
+    let displayName = "Unknown Lead";
+    let description = "Prospect";
+
+    if (fullText && fullText !== "Unknown") {
+      // Common pattern: "Name Status is offline Student at School"
+      // Extract just the name (first part before "Status" or "Student")
+      const parts = fullText.split(/\s+(?:Status|Student)\s+/);
+      displayName = parts[0].trim();
+      console.log("Extracted display name:", displayName);
+
+      // Extract description/school info
+      if (fullText.includes("Student at")) {
+        const schoolMatch = fullText.match(/Student at (.+)/);
+        if (schoolMatch && schoolMatch[1]) {
+          description = `Student at ${schoolMatch[1].trim()}`;
+        } else {
+          description = "Student";
+        }
+        console.log("Extracted description:", description);
+      } else if (fullText.includes("at")) {
+        // Handle other "at" patterns
+        const atMatch = fullText.match(/at (.+)/);
+        if (atMatch && atMatch[1]) {
+          description = atMatch[1].trim();
+        }
+      }
+    } else {
+      console.log("No prospect name found, using defaults");
+    }
+
+    // Display lead name
+    const leadName = document.getElementById("leadName");
+    if (leadName) {
+      leadName.textContent = displayName;
+    }
+
+    // Display lead description
+    const leadDescription = document.getElementById("leadDescription");
+    if (leadDescription) {
+      leadDescription.textContent = description;
+    }
+
+    // Display status based on data source
+    const leadStatus = document.getElementById("leadStatus");
+    if (leadStatus) {
+      if (conversationData._fromLocalStorage === true) {
+        // Only in localStorage, not synced to database
+        leadStatus.textContent = "Not Stored";
+        leadStatus.style.background = "#dc3545"; // Red for not stored
+      } else if (conversationData._fromLocalStorage === false) {
+        // From Supabase database
+        leadStatus.textContent = "Database Data";
+        leadStatus.style.background = "#28a745"; // Green for database
+      } else if (conversationData._dataSource === "dom") {
+        // Fresh from DOM
+        leadStatus.textContent = "DOM Data";
+        leadStatus.style.background = "#ffc107"; // Yellow for DOM
+      } else {
+        // Fresh from DOM, not saved anywhere
+        leadStatus.textContent = "DOM Data";
+        leadStatus.style.background = "#ffc107"; // Yellow for DOM
+      }
+    }
+
+    // Display message count
+    const messageCount = document.getElementById("messageCount");
+    if (messageCount && conversationData.messages) {
+      messageCount.textContent = conversationData.messages.length;
+    }
+
+    // Display last message time
+    const lastMessageTime = document.getElementById("lastMessageTime");
+    if (lastMessageTime) {
+      const lastMessage =
+        conversationData.messages?.[conversationData.messages.length - 1];
+      if (lastMessage && lastMessage.timestamp) {
+        lastMessageTime.textContent = lastMessage.timestamp;
+      } else if (lastMessage && lastMessage.actualTimestamp) {
+        // Format ISO timestamp
+        const date = new Date(lastMessage.actualTimestamp);
+        lastMessageTime.textContent = date.toLocaleTimeString();
+      } else {
+        lastMessageTime.textContent = "Just now";
+      }
+    }
+
+    // Display last message preview
+    const lastMessagePreview = document.getElementById("lastMessagePreview");
+    if (lastMessagePreview && conversationData.messages) {
+      const lastMessage =
+        conversationData.messages[conversationData.messages.length - 1];
+      if (lastMessage && lastMessage.text) {
+        const preview = lastMessage.text.substring(0, 100);
+        lastMessagePreview.textContent = preview;
+      } else {
+        lastMessagePreview.textContent = "No messages yet";
+      }
+    }
+  }
+
+  async autoSaveConversation(tabId, threadId) {
+    try {
+      // Check if already saved
+      const existingData = await this.supabaseService.getConversation(threadId);
+      if (existingData) {
+        console.log("Conversation already exists in database");
+        return;
+      }
+
+      console.log("Auto-saving conversation:", threadId);
+
+      // Extract conversation data from DOM
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: () => {
+          try {
+            // Get thread ID
+            const threadId =
+              window.location.href.match(/\/thread\/([^\/\?]+)/)?.[1] ||
+              "unknown";
+
+            // Find the message input form
+            const messageForm = document.querySelector(".msg-form");
+            if (!messageForm) {
+              return { error: "Message input form not found" };
+            }
+
+            // Work backwards from the input form
+            let activeConversationThread = messageForm.closest(
+              ".msg-convo-wrapper.msg-thread"
+            );
+            if (!activeConversationThread) {
+              activeConversationThread = messageForm.closest(
+                "[class*='msg-thread']"
+              );
+            }
+
+            if (!activeConversationThread) {
+              return { error: "Active conversation thread not found" };
+            }
+
+            // Find message list
+            const messageListContainer = activeConversationThread.querySelector(
+              ".msg-s-message-list"
+            );
+            if (!messageListContainer) {
+              return { error: "Message list container not found" };
+            }
+
+            const messageContentList = messageListContainer.querySelector(
+              ".msg-s-message-list-content"
+            );
+            if (!messageContentList) {
+              return { error: "Message content list not found" };
+            }
+
+            // Extract individual messages
+            const messageElements = messageContentList.querySelectorAll(
+              ".msg-s-event-listitem"
+            );
+
+            const messages = [];
+            messageElements.forEach((messageEl, index) => {
+              try {
+                // Get message text
+                const bodyEl = messageEl.querySelector(
+                  ".msg-s-event-listitem__body"
+                );
+                const text = bodyEl ? bodyEl.textContent.trim() : "";
+
+                if (!text) return; // Skip empty messages
+
+                // Determine sender (you vs them)
+                const isFromYou = !messageEl.classList.contains(
+                  "msg-s-event-listitem--other"
+                );
+
+                // Get timestamp
+                const timeEl = messageEl.querySelector(
+                  ".msg-s-message-list__time-heading"
+                );
+                const timestamp = timeEl ? timeEl.textContent.trim() : "";
+
+                // Get sender name from profile info
+                const profileEl = messageEl.querySelector(
+                  ".msg-s-event-listitem__profile-picture"
+                );
+                const senderName = profileEl
+                  ? (
+                      profileEl.getAttribute("alt") ||
+                      profileEl.getAttribute("title") ||
+                      ""
+                    ).replace(" Profile", "")
+                  : "";
+
+                messages.push({
+                  localIndex: index,
+                  text: text,
+                  sender: isFromYou ? "you" : "prospect",
+                  senderName: senderName,
+                  timestamp: timestamp,
+                  extractedAt: new Date().toISOString(),
+                  isFromYou: isFromYou,
+                });
+              } catch (e) {
+                console.warn("Error parsing message element:", e);
+              }
+            });
+
+            // Extract prospect name
+            const prospectNameEl = activeConversationThread.querySelector(
+              ".msg-thread__link-to-profile"
+            );
+            const prospectName = prospectNameEl
+              ? prospectNameEl.textContent.trim()
+              : "Unknown";
+
+            return {
+              threadId: threadId,
+              prospectName: prospectName,
+              messages: messages,
+              url: window.location.href,
+              extractedAt: new Date().toISOString(),
+            };
+          } catch (e) {
+            console.error("Extraction error:", e);
+            return { error: e.message };
+          }
+        },
+      });
+
+      if (
+        results &&
+        results[0] &&
+        results[0].result &&
+        !results[0].result.error
+      ) {
+        const conversationData = results[0].result;
+
+        // Mark as DOM data for immediate display
+        conversationData._dataSource = "dom";
+        conversationData._fromLocalStorage = false;
+        this.displayLeadInfo(conversationData);
+
+        // Save locally first
+        const storageKey = `linkedin_conversation_${threadId}`;
+        await chrome.storage.local.set({
+          [storageKey]: conversationData,
+        });
+
+        // Save to Supabase
+        console.log("💾 Saving conversation to Supabase...");
+        await this.supabaseService.saveConversation(conversationData);
+        console.log("✅ Auto-saved conversation:", threadId);
+
+        // AUTO-GENERATE RESPONSE after saving
+        console.log("🚀🚀🚀 TRIGGERING AUTO-GENERATION NOW 🚀🚀🚀");
+        console.log("🚀 Thread ID:", threadId);
+        console.log(
+          "🚀 Conversation has",
+          conversationData.messages?.length || 0,
+          "messages"
+        );
+        this.setStatus("Auto-generating", "Generating AI response...");
+
+        // Use the conversation data we just saved instead of fetching again
+        conversationData._fromLocalStorage = false;
+
+        // TRY to auto-generate, but don't block if it fails
+        console.log("🚀 About to call autoGenerateResponseWithData");
+        await this.autoGenerateResponseWithData(conversationData, threadId);
+        console.log("🚀 Finished auto-generate call");
+      }
+    } catch (error) {
+      console.error("Error auto-saving conversation:", error);
+    }
+  }
+
+  async monitorUrlChanges() {
+    // Check for URL changes every second
+    setInterval(async () => {
+      try {
+        const [tab] = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+
+        if (!tab.url || !tab.url.includes("linkedin.com/messaging")) {
+          if (this.currentThreadId) {
+            this.hideLeadInfo();
+            this.currentThreadId = null;
+          }
+          return;
+        }
+
+        // Extract thread ID from current URL
+        const threadId = tab.url.match(/\/thread\/([^\/\?]+)/)?.[1];
+
+        // If thread ID changed, reload the conversation and auto-save
+        if (threadId && threadId !== this.currentThreadId) {
+          console.log("Thread changed:", this.currentThreadId, "->", threadId);
+          this.currentThreadId = threadId;
+
+          // First show DOM data immediately
+          await this.loadCurrentConversation();
+
+          // Then auto-save and update with database data
+          await this.autoSaveConversation(tab.id, threadId);
+
+          // Reload with database data after save
+          await this.loadCurrentConversation();
+        } else if (!threadId && this.currentThreadId) {
+          // If not in a messaging thread anymore, hide the lead info
+          this.hideLeadInfo();
+          this.currentThreadId = null;
+        }
+      } catch (error) {
+        console.error("Error monitoring URL changes:", error);
+      }
+    }, 1000); // Check every second
+  }
+
+  hideLeadInfo() {
+    const leadInfoDiv = document.getElementById("leadInfo");
+    if (leadInfoDiv) {
+      leadInfoDiv.style.display = "none";
+    }
+  }
+
+  async autoGenerateResponseWithData(conversationData, threadId) {
+    // Auto-generate response when conversation is saved/updated
+    console.log("🚨🚨🚨 autoGenerateResponseWithData CALLED 🚨🚨🚨");
+    console.log("🚨 Thread ID:", threadId);
+    console.log("🚨 Has AIService?", !!this.aiService);
+    console.log("🚨 AIService URL:", this.aiService?.baseUrl);
+
+    try {
+      console.log("🎯 Auto-generating AI response for thread:", threadId);
+
+      // Check if AI service is available
+      console.log("🔍 Checking AI service health...");
+      console.log("🔍 AI base URL:", this.aiService.baseUrl);
+      const isHealthy = await this.aiService.checkHealth();
+      console.log("🔍 AI service health result:", isHealthy);
+
+      if (!isHealthy) {
+        console.log("⚠️ AI service not available, skipping auto-generation");
+        console.log(
+          "💡 To enable auto-generation, start: cd ai_module && python main.py"
+        );
+        this.setStatus(
+          "Info",
+          "AI not running - start: cd ai_module && python main.py"
+        );
+        return;
+      }
+
+      console.log("✓ AI service is healthy, proceeding with generation");
+
+      if (!conversationData || !conversationData.messages) {
+        console.log("⚠️ No conversation data, skipping");
+        return;
+      }
+
+      console.log("✓ Got conversation data, generating response...");
+
+      // Generate response
+      console.log("📞 Calling AI service to generate response...");
+      const aiResult = await this.aiService.generateResponse(
+        conversationData,
+        conversationData.prospectName
+      );
+
+      console.log("✅ Generated response:", aiResult.response);
+      console.log("✅ Response phase:", aiResult.phase);
+
+      // Find the LinkedIn tab (the actual messaging page, not the popup)
+      const tabs = await chrome.tabs.query({});
+      const linkedinTab = tabs.find(
+        (tab) =>
+          tab.url &&
+          tab.url.includes(`/thread/${threadId}`) &&
+          tab.url.includes("linkedin.com/messaging")
+      );
+
+      if (linkedinTab) {
+        console.log("✓ Found LinkedIn tab, injecting response...");
+        await this.aiService.injectResponse(aiResult.response, linkedinTab.id);
+        console.log(
+          "✅ Auto-generated and injected response:",
+          aiResult.response
+        );
+        this.setStatus("Success", `Response ready! Phase: ${aiResult.phase}`);
+
+        // Show regenerate button
+        const regenerateBtn = document.getElementById("regenerateBtn");
+        if (regenerateBtn) {
+          regenerateBtn.style.display = "block";
+          regenerateBtn.textContent = "🔄 Regenerate";
+        }
+      } else {
+        console.log("⚠️ Could not find LinkedIn messaging tab");
+        this.setStatus(
+          "Success",
+          `Response generated: ${aiResult.response.substring(0, 50)}...`
+        );
+      }
+    } catch (error) {
+      console.error("❌ Error in auto-generate:", error);
+      console.error("Error stack:", error.stack);
+      // Don't show error to user in auto-mode, just log it
+    }
+  }
+
+  async autoGenerateResponse(threadId) {
+    // Get conversation from Supabase
+    const conversationData = await this.supabaseService.getConversation(
+      threadId
+    );
+    await this.autoGenerateResponseWithData(conversationData, threadId);
+  }
+
+  async generateAIResponse() {
+    const generateBtn = document.getElementById("generateResponseBtn");
+    const originalText = generateBtn.textContent;
+
+    try {
+      generateBtn.disabled = true;
+      generateBtn.textContent = "Generating...";
+      this.setStatus("Generating", "Calling AI service...");
+
+      // Check if AI service is available
+      const isHealthy = await this.aiService.checkHealth();
+      if (!isHealthy) {
+        throw new Error(
+          "AI service is not available. Make sure Python server is running on http://127.0.0.1:5000"
+        );
+      }
+
+      // Generate and inject response
+      const result = await this.aiService.generateAndInject(
+        this.supabaseService
+      );
+
+      // Show phase emoji
+      const phaseEmoji = result.phase === "doing_the_ask" ? "💰" : "🤝";
+
+      this.setStatus(
+        "Success",
+        `Response generated! ${phaseEmoji} Phase: ${result.phase}`
+      );
+      generateBtn.textContent = "✅ Generated!";
+
+      // Security reminder
+      console.log(
+        "🔒 SECURITY: Response ready for review. Manual send required."
+      );
+
+      // Show regenerate button
+      const regenerateBtn = document.getElementById("regenerateBtn");
+      if (regenerateBtn) {
+        regenerateBtn.style.display = "block";
+        regenerateBtn.textContent = "🔄 Regenerate";
+      }
+
+      // Show reasoning in info div
+      const infoDiv = document.querySelector(".info");
+      if (infoDiv) {
+        infoDiv.innerHTML = `💡 ${result.reasoning || "Response ready"} (${
+          result.response.length
+        } chars) | Phase: ${result.phase}`;
+      }
+    } catch (error) {
+      console.error("Error generating AI response:", error);
+      this.setStatus("Error", error.message);
+      generateBtn.textContent = "❌ Error";
+
+      // Show error details
+      const infoDiv = document.querySelector(".info");
+      if (infoDiv) {
+        infoDiv.innerHTML = `❌ ${error.message}`;
+      }
+    } finally {
+      setTimeout(() => {
+        generateBtn.textContent = "🤖 Generate Response";
+        generateBtn.disabled = false;
+      }, 3000);
+    }
   }
 }
 

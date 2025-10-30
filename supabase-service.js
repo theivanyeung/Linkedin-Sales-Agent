@@ -72,27 +72,99 @@ class SupabaseService {
       // Check if conversation exists
       const existing = await this.getConversation(conversationData.threadId);
       if (existing) {
-        // Merge messages using signature without domId/senderName/timestamps
+        // Smarter merge to preserve chronology across partial loads
         const existingMsgs = Array.isArray(existing.messages)
           ? existing.messages.map(normalizeMessage)
           : [];
-        const sigToMsg = new Map();
+
         const buildSig = (m) => `${m.sender}|${m.text}`;
-        for (const m of existingMsgs) sigToMsg.set(buildSig(m), m);
-        for (const m of newMsgs) {
-          const sig = buildSig(m);
-          if (!sigToMsg.has(sig)) sigToMsg.set(sig, m);
+        const newBySig = new Map();
+        const oldBySig = new Map();
+
+        // Positions within their respective arrays
+        const newOrder = [];
+        newMsgs
+          .slice()
+          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+          .forEach((m, i) => {
+            const sig = buildSig(m);
+            if (!newBySig.has(sig)) {
+              newBySig.set(sig, { msg: m, pos: i });
+              newOrder.push(sig);
+            }
+          });
+
+        const oldOrder = [];
+        existingMsgs
+          .slice()
+          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+          .forEach((m, i) => {
+            const sig = buildSig(m);
+            if (!oldBySig.has(sig)) {
+              oldBySig.set(sig, { msg: m, pos: i });
+              oldOrder.push(sig);
+            }
+          });
+
+        // Identify overlap and only-in-old
+        const overlap = new Set(newOrder.filter((sig) => oldBySig.has(sig)));
+        const onlyOld = oldOrder.filter((sig) => !newBySig.has(sig));
+
+        let combined = [];
+        if (overlap.size > 0) {
+          // Compute min/max old positions of overlap to split old-only into older/newer buckets
+          let minOldOverlap = Infinity;
+          let maxOldOverlap = -Infinity;
+          overlap.forEach((sig) => {
+            const p = oldBySig.get(sig)?.pos ?? 0;
+            if (p < minOldOverlap) minOldOverlap = p;
+            if (p > maxOldOverlap) maxOldOverlap = p;
+          });
+
+          const olderOnly = onlyOld
+            .filter((sig) => (oldBySig.get(sig)?.pos ?? 0) < minOldOverlap)
+            .sort(
+              (a, b) =>
+                (oldBySig.get(a)?.pos ?? 0) - (oldBySig.get(b)?.pos ?? 0)
+            )
+            .map((sig) => oldBySig.get(sig).msg);
+
+          const newerOnly = onlyOld
+            .filter((sig) => (oldBySig.get(sig)?.pos ?? 0) > maxOldOverlap)
+            .sort(
+              (a, b) =>
+                (oldBySig.get(a)?.pos ?? 0) - (oldBySig.get(b)?.pos ?? 0)
+            )
+            .map((sig) => oldBySig.get(sig).msg);
+
+          const coreNew = newOrder
+            .map((sig) => newBySig.get(sig)?.msg)
+            .filter(Boolean);
+
+          combined = [...olderOnly, ...coreNew, ...newerOnly];
+        } else {
+          // No overlap: keep existing in place, append latest extraction at the end
+          const coreNew = newOrder
+            .map((sig) => newBySig.get(sig)?.msg)
+            .filter(Boolean);
+          const restOld = onlyOld
+            .sort(
+              (a, b) =>
+                (oldBySig.get(a)?.pos ?? 0) - (oldBySig.get(b)?.pos ?? 0)
+            )
+            .map((sig) => oldBySig.get(sig).msg);
+          combined = [...restOld, ...coreNew];
         }
-        let merged = Array.from(sigToMsg.values());
-        // Assign sequential index and strip to exact keys
-        merged = merged.map((m, i) => ({
+
+        // Reindex and strictly map to minimal schema
+        const merged = combined.map((m, i) => ({
           index: i,
-          text: m.text,
-          sender: m.sender,
-          attachments: m.attachments || [],
-          reactions: m.reactions || [],
-          mentions: m.mentions || [],
-          links: m.links || [],
+          text: m.text || "",
+          sender: m.sender || "prospect",
+          attachments: Array.isArray(m.attachments) ? m.attachments : [],
+          reactions: Array.isArray(m.reactions) ? m.reactions : [],
+          mentions: Array.isArray(m.mentions) ? m.mentions : [],
+          links: Array.isArray(m.links) ? m.links : [],
         }));
 
         const basePayload = {

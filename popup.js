@@ -30,6 +30,13 @@ class DOMExtractor {
         this.generateResponse();
       });
     }
+
+    const updateBtn = document.getElementById("updateCloudBtn");
+    if (updateBtn) {
+      updateBtn.addEventListener("click", () => {
+        this.manualUpdateCloud();
+      });
+    }
   }
 
   async checkPageStatus() {
@@ -712,6 +719,53 @@ class DOMExtractor {
     }
   }
 
+  async manualUpdateCloud() {
+    const btn = document.getElementById("updateCloudBtn");
+    const original = btn ? btn.textContent : "";
+    try {
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Updating...";
+      }
+      this.setStatus("Saving", "Updating cloud for current conversation...");
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (
+        !tab ||
+        !tab.url ||
+        !tab.url.includes("linkedin.com/messaging/thread/")
+      ) {
+        throw new Error("Open a LinkedIn conversation thread first");
+      }
+      const convo = await this.extractConversationFromActiveTab(tab.id);
+      if (convo && !convo.error) {
+        this.addConsoleLog("DB", "Manual update triggered", {
+          threadId: convo.threadId,
+        });
+        await this.persistConversation(convo);
+        this.setStatus("Synced", `Conversation ${convo.threadId} updated`);
+        if (btn) btn.textContent = "✅ Updated";
+      } else {
+        throw new Error(
+          convo && convo.error ? convo.error : "Extraction failed"
+        );
+      }
+    } catch (e) {
+      this.addConsoleLog("DB", "Manual update failed", { error: e.message });
+      this.setStatus("Error", e.message || "Update failed");
+      if (btn) btn.textContent = "❌ Error";
+    } finally {
+      setTimeout(() => {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = original || "Update Cloud";
+        }
+      }, 2000);
+    }
+  }
+
   async extractConversationFromActiveTab(tabId) {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
@@ -762,13 +816,17 @@ class DOMExtractor {
               ".msg-s-event-listitem__sender"
             );
             const senderName = senderEl ? senderEl.textContent.trim() : "";
-            // Robust sender detection (outbound = you)
-            const isFromYou =
+            // Robust sender detection: LinkedIn marks inbound with --other
+            const isOther = messageEl.classList.contains(
+              "msg-s-event-listitem--other"
+            );
+            const outboundFlags =
               messageEl.classList.contains("msg-s-event-listitem--outbound") ||
               messageEl.classList.contains("msg-s-event-listitem--self") ||
               !!messageEl.querySelector(
                 ".msg-s-event-listitem__profile-picture--me, .msg-s-message-group--own"
               );
+            const isFromYou = outboundFlags || !isOther;
 
             // Attachments
             const attachments = [];

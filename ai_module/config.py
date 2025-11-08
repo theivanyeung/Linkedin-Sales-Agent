@@ -13,7 +13,7 @@ class Config:
     
     # OpenAI Configuration
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_MODEL = "gpt-4o"
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
     TEMPERATURE = 0.7
     MAX_TOKENS = 500
     
@@ -24,7 +24,8 @@ class Config:
     
     # Supabase Configuration (for future integration)
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", os.getenv("SUPABASE_KEY", ""))
+    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
     
     # AI Strategy Configuration
     MAX_CONVERSATION_LENGTH = 50  # Max messages to consider for context

@@ -1,6 +1,6 @@
 # LinkedIn Sales Agent AI Module
 
-Python AI service for generating natural sales conversation responses using LangChain and GPT-4o.
+Minimal, modern AI analysis and decisioning using OpenAI Responses API (default model via `OPENAI_MODEL`).
 
 ## Overview
 
@@ -31,28 +31,20 @@ Create a `.env` file in the `ai_module` directory:
 OPENAI_API_KEY=your_openai_api_key_here
 
 # Optional (defaults shown)
-FLASK_HOST=127.0.0.1
-FLASK_PORT=5000
-FLASK_DEBUG=True
+OPENAI_MODEL=gpt-5
 ```
 
-### 3. Test the AI (Recommended)
+### 3. Test the AI (Simulator)
 
-Test the AI before using it in production:
+Run the CLI simulator (you play the engaged lead):
 
 ```bash
-python test_sales_simulator.py
+python -m ai_module.simulator
 ```
 
-You'll role-play as a student prospect while the AI tries to sell you Prodicity!
-
-**Commands:**
-
-- Type your message to respond as the prospect
-- `analyze` - Show conversation analysis
-- `history` - View full conversation
-- `ai` - Force AI to respond
-- `exit` - Quit simulator
+- Type messages as the prospect
+- `/analyze` or `/phase` to view analysis
+- `/exit` to quit
 
 ### 4. Run the AI Service
 
@@ -64,11 +56,9 @@ The service will start on `http://127.0.0.1:5000`
 
 ## API Endpoints
 
-### `POST /generate`
+### `POST /analyze`
 
-Generate a sales conversation response.
-
-**Request:**
+Analyze conversation state without generating response.
 
 ```json
 {
@@ -90,20 +80,7 @@ Generate a sales conversation response.
 }
 ```
 
-**Response:**
-
-```json
-{
-  "response": "That's awesome! Tell me more about your startup.",
-  "strategy": "rapport_build",
-  "reasoning": "Build rapport through questions about their projects",
-  "engagement_score": 0.7,
-  "sentiment_score": 0.8,
-  "phase": "rapport_build",
-  "next_action": "continue_building_rapport",
-  "is_ready_for_sell": false
-}
-```
+**Response:** Unified JSON with phase, readiness, scores, signals, criteria, recommendation.
 
 ### `GET /health`
 
@@ -125,19 +102,9 @@ Analyze conversation state without generating response.
 ## How It Works
 
 1. **Input**: Conversation history from Supabase
-2. **Analysis**:
-   - Sentiment analysis (positive/negative keywords)
-   - Engagement scoring (message length, personal pronouns)
-   - Phase detection (initial → rapport → sell)
-3. **Context Building**:
-   - Recent conversation history
-   - Knowledge base (Prodicity info)
-   - Sales principles and static scripts
-4. **Generation**:
-   - GPT-4o generates natural, short response
-   - Based on current conversation phase
-   - Personalized to prospect's interests
-5. **Output**: Suggested response text with strategy and reasoning
+2. **Single-pass LLM analysis** (OpenAI Responses API): phase, sentiment, engagement, questions, negative signals, recommendation
+3. **Readiness gate**: deterministic thresholds for sell timing
+4. **Output**: Unified JSON for extension/backend
 
 ## Sales Principles
 
@@ -208,11 +175,15 @@ The extension calls this service to:
 ```
 ai_module/
 ├── __init__.py
-├── main.py                    # Flask app
-├── llm_service.py            # OpenAI integration
-├── conversation_analyzer.py  # Sentiment & phase detection
-├── static_scripts.py          # Sales scripts
-├── knowledge_base.py          # Prodicity info
+├── llm_service.py            # OpenAI Responses API wrapper
+├── analyzer.py               # Single-pass analysis
+├── policies/readiness.py     # Deterministic gate
+├── orchestrator.py           # Pipeline
+├── static_scripts.py         # Stubs for scripts
+├── knowledge_base.py         # Stub KB retriever
+├── io_models.py              # Data models
+├── ingest.py                 # Normalization
+├── simulator.py              # CLI simulator
 ├── config.py                  # Configuration
 ├── requirements.txt           # Dependencies
 └── README.md                  # This file

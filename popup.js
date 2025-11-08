@@ -6,6 +6,8 @@ class DOMExtractor {
     this.lastThreadId = null;
     this.lastAutoSaveAt = 0;
     this.consoleEntries = [];
+    this.responseHistoryByThread = {};
+    this.kbStatusEl = null;
     this.init();
   }
 
@@ -27,7 +29,7 @@ class DOMExtractor {
     const genBtn = document.getElementById("generateResponseBtn");
     if (genBtn) {
       genBtn.addEventListener("click", () => {
-        this.generateResponse();
+        this.generateFromCloud();
       });
     }
 
@@ -37,6 +39,21 @@ class DOMExtractor {
         this.manualUpdateCloud();
       });
     }
+
+    // Single generate button handles fetching from cloud and injecting
+    const prevBtn = document.getElementById("prevRespBtn");
+    const nextBtn = document.getElementById("nextRespBtn");
+    if (prevBtn)
+      prevBtn.addEventListener("click", () => this.navigateHistory(-1));
+    if (nextBtn)
+      nextBtn.addEventListener("click", () => this.navigateHistory(1));
+    
+    const saveKbBtn = document.getElementById("saveKbBtn");
+    if (saveKbBtn) {
+      saveKbBtn.addEventListener("click", () => this.saveKnowledgeEntry());
+    }
+
+    this.kbStatusEl = document.getElementById("kbStatusMessage");
   }
 
   async checkPageStatus() {
@@ -56,6 +73,64 @@ class DOMExtractor {
     } catch (error) {
       console.error("Error checking page status:", error);
       this.setStatus("Error", "Unable to check page status");
+    }
+  }
+
+  async generateFromCloud() {
+    try {
+      this.setStatus("Thinking", "Fetching from cloud and generating...");
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (
+        !tab ||
+        !tab.url ||
+        !tab.url.includes("linkedin.com/messaging/thread/")
+      ) {
+        throw new Error("Open a LinkedIn conversation thread first");
+      }
+      const threadId = tab.url.match(/\/thread\/([^\/\?]+)/)?.[1];
+      if (!threadId) throw new Error("Cannot determine thread ID");
+
+      // Fetch conversation from Supabase
+      const convo = await this.supabaseService.getConversation(threadId);
+      if (!convo || !convo.messages || !convo.messages.length) {
+        throw new Error(
+          "No conversation data in cloud. Click Update Cloud first."
+        );
+      }
+
+      // Ensure AI is available
+      const healthy = await this.aiService.checkHealth();
+      if (!healthy)
+        throw new Error(
+          "AI service not running (cd ai_module && python main.py)"
+        );
+
+      // Generate
+      const aiResult = await this.aiService.generateResponse(
+        convo,
+        convo.prospectName || convo.title || ""
+      );
+
+      // Show suggested response in the top bar and add to history
+      this.setStatus("Suggested", aiResult.response);
+      this.addToHistory(threadId, aiResult.response);
+      
+      // Update phase display
+      this.updatePhaseDisplay(aiResult.phase);
+
+      // Inject
+      await this.aiService.injectResponse(aiResult.response, tab.id);
+      this.addConsoleLog("AI", "Generated from cloud", {
+        threadId,
+        phase: aiResult.phase,
+      });
+      return aiResult;
+    } catch (e) {
+      console.error("GenerateFromCloud failed:", e);
+      this.setStatus("Error", e.message || "Failed generating from cloud");
     }
   }
 
@@ -86,6 +161,22 @@ class DOMExtractor {
     if (nameEl) nameEl.textContent = `Lead: ${name}`;
     if (descEl) descEl.textContent = description || "";
     if (dataEl) dataEl.innerHTML = dataHtml || "";
+  }
+
+  updatePhaseDisplay(phase) {
+    const phaseEl = document.getElementById("statusPhase");
+    const phaseValueEl = document.getElementById("phaseValue");
+    if (!phaseEl || !phaseValueEl) return;
+    
+    if (phase) {
+      const phaseText = phase === "doing_the_ask" ? "Selling Phase" : "Building Rapport";
+      const phaseColor = phase === "doing_the_ask" ? "#f39c12" : "#8ab4ff";
+      phaseValueEl.textContent = phaseText;
+      phaseValueEl.style.color = phaseColor;
+      phaseEl.style.display = "block";
+    } else {
+      phaseEl.style.display = "none";
+    }
   }
 
   async extractDOM() {
@@ -712,6 +803,16 @@ class DOMExtractor {
           dataHtml,
         });
         this.setStatus("Synced", `Conversation ${convo.threadId} saved`);
+
+        // After saving/updating in cloud, auto-generate and inject a response
+        try {
+          this.addConsoleLog("AI", "Auto-generating after save", { threadId });
+          await this.autoGenerateFromCloud(threadId);
+        } catch (e) {
+          this.addConsoleLog("AI", "Auto-generate failed (non-blocking)", {
+            error: e.message,
+          });
+        }
       }
     } catch (e) {
       // Silent fail to avoid noisy UI
@@ -765,6 +866,119 @@ class DOMExtractor {
       }, 2000);
     }
   }
+
+  async autoGenerateFromCloud(threadId) {
+    // Fetch latest conversation from Supabase, generate via AI, and inject
+    // Runs automatically after a successful cloud save/update
+    const healthy = await this.aiService.checkHealth();
+    if (!healthy) {
+      this.addConsoleLog("AI", "Skipped (AI offline)", {});
+      return;
+    }
+    const convo = await this.supabaseService.getConversation(threadId);
+    if (!convo || !convo.messages || !convo.messages.length) {
+      this.addConsoleLog("AI", "No conversation found in cloud", {
+        threadId,
+      });
+      return;
+    }
+
+    // Generate
+    const aiResult = await this.aiService.generateResponse(
+      convo,
+      convo.prospectName || convo.title || ""
+    );
+    this.addConsoleLog("AI", "Generated", { phase: aiResult.phase });
+
+    // Inject into currently active LinkedIn tab
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    if (!tab || !tab.url || !tab.url.includes("linkedin.com/messaging")) {
+      this.addConsoleLog("AI", "Injection skipped (not on messaging)", {});
+      return;
+    }
+      // Show suggested response in the top bar and add to history
+      this.setStatus("Suggested", aiResult.response);
+      this.addToHistory(threadId, aiResult.response);
+      
+      // Update phase display
+      this.updatePhaseDisplay(aiResult.phase);
+      
+      await this.aiService.injectResponse(aiResult.response, tab.id);
+  }
+
+  // ===== Response History =====
+  getHistory(threadId) {
+    if (!this.responseHistoryByThread[threadId]) {
+      this.responseHistoryByThread[threadId] = { items: [], index: -1 };
+    }
+    return this.responseHistoryByThread[threadId];
+  }
+
+  addToHistory(threadId, text) {
+    const hist = this.getHistory(threadId);
+    // If current index not at end, truncate forward history
+    if (hist.index < hist.items.length - 1) {
+      hist.items = hist.items.slice(0, hist.index + 1);
+    }
+    hist.items.push(text);
+    hist.index = hist.items.length - 1;
+    this.updateHistoryUI(threadId);
+  }
+
+  updateHistoryUI(threadId) {
+    const hist = this.getHistory(threadId);
+    const counter = document.getElementById("respCounter");
+    if (counter)
+      counter.textContent = `${hist.items.length ? hist.index + 1 : 0}/${
+        hist.items.length
+      }`;
+    const prevBtn = document.getElementById("prevRespBtn");
+    const nextBtn = document.getElementById("nextRespBtn");
+    
+    // Only enable buttons if multiple responses exist
+    const hasMultiple = hist.items.length > 1;
+    if (prevBtn) {
+      prevBtn.disabled = !hasMultiple || hist.index <= 0;
+    }
+    if (nextBtn) {
+      nextBtn.disabled = !hasMultiple || hist.index >= hist.items.length - 1;
+    }
+  }
+
+  async navigateHistory(delta) {
+    const threadId = await this.getActiveThreadId();
+    if (!threadId) return;
+    const hist = this.getHistory(threadId);
+    const newIndex = hist.index + delta;
+    if (newIndex < 0 || newIndex >= hist.items.length) return;
+    hist.index = newIndex;
+    const text = hist.items[hist.index];
+    this.setStatus("Suggested", text);
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    if (tab && tab.url && tab.url.includes("linkedin.com/messaging")) {
+      await this.aiService.injectResponse(text, tab.id);
+    }
+    this.updateHistoryUI(threadId);
+  }
+
+  // reinjectCurrent removed; generation flow injects automatically
+
+  async getActiveThreadId() {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    if (!tab || !tab.url) return null;
+    const match = tab.url.match(/\/thread\/([^\/\?]+)/);
+    return match ? match[1] : null;
+  }
+
 
   async extractConversationFromActiveTab(tabId) {
     const results = await chrome.scripting.executeScript({
@@ -1747,6 +1961,74 @@ class DOMExtractor {
       filename,
       saveAs: false,
     });
+  }
+
+  setKbStatus(message, isError = false) {
+    if (!this.kbStatusEl) return;
+    this.kbStatusEl.textContent = message;
+    this.kbStatusEl.style.color = isError ? "#ffb4b4" : "#9aa7b2";
+  }
+
+  async saveKnowledgeEntry() {
+    const questionEl = document.getElementById("kbQuestionInput");
+    const answerEl = document.getElementById("kbAnswerInput");
+    const tagsEl = document.getElementById("kbTagsInput");
+    const sourceEl = document.getElementById("kbSourceInput");
+    const saveBtn = document.getElementById("saveKbBtn");
+
+    const answer = answerEl ? answerEl.value.trim() : "";
+    const question = questionEl ? questionEl.value.trim() : "";
+    const tagsRaw = tagsEl ? tagsEl.value.trim() : "";
+    const source = sourceEl ? sourceEl.value.trim() : "";
+
+    if (!answer) {
+      this.setKbStatus("Answer is required before saving.", true);
+      if (answerEl) answerEl.focus();
+      return;
+    }
+
+    const tags = tagsRaw
+      ? tagsRaw
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter((tag) => tag.length > 0)
+      : undefined;
+
+    try {
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving...";
+      }
+      this.setKbStatus("Saving to knowledge base...", false);
+
+      const payload = {
+        question: question || null,
+        answer,
+        source: source || null,
+        tags,
+      };
+
+      const result = await this.aiService.addKnowledgeEntry(payload);
+      this.setKbStatus("Saved! The AI can now reuse this answer.", false);
+
+      // Clear fields except source to make follow-up entries faster
+      if (questionEl) questionEl.value = "";
+      if (answerEl) answerEl.value = "";
+      if (tagsEl) tagsEl.value = "";
+
+      // Show document id in console panel for debugging
+      this.addConsoleLog("KB", "Added entry", {
+        id: result?.document?.id,
+        source: payload.source,
+      });
+    } catch (error) {
+      this.setKbStatus(error.message || "Failed to save knowledge entry.", true);
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save to Knowledge Base";
+      }
+    }
   }
 }
 

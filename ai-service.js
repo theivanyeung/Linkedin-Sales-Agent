@@ -146,6 +146,33 @@ class AIService {
   }
 
   /**
+   * Save a knowledge base document via the AI backend.
+   */
+  async addKnowledgeEntry({ question, answer, source, tags }) {
+    try {
+      const response = await fetch(`${this.baseUrl}/kb/add`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ question, answer, source, tags }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Failed to add knowledge document (${response.status}): ${errorText}`
+        );
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Error adding knowledge entry:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Full flow: get conversation → generate response → inject
    *
    * SECURITY: Always requires manual user review and send

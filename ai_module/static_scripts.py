@@ -244,7 +244,7 @@ def get_prompt_blocks(phase: str) -> List[str]:
     """
     config = get_phase_config(phase)
     if not config:
-    return []
+        return []
 
     blocks: List[str] = [
         f"PHASE: {config.get('name', phase).title()}",

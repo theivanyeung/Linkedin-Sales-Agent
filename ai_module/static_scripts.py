@@ -1,246 +1,380 @@
 """
-Static scripts for building rapport and selling phases.
+Static sales scripts organised by phase and sub-phase.
 
-Provides templates, question probes, and context to guide the LLM in
-progressing conversations from engaged lead → application pipeline.
+Phase data is stored in a structured dictionary so it’s easy to add new
+phases, variants, or copy blocks without touching application logic.
 """
 
-from typing import List, Dict, Optional
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Any
 
 
-# ============================================================================
-# BUILDING RAPPORT PHASE
-# ============================================================================
+# --------------------------------------------------------------------------- #
+# Phase library
+# --------------------------------------------------------------------------- #
+
+PHASE_LIBRARY: Dict[str, Dict[str, Any]] = {
+    "building_rapport": {
+        "name": "Building Rapport",
+        "summary": (
+            "Engage the lead, ask questions, validate their responses, and build trust."
+        ),
+        "initial_message": (
+            "hey {name}, I'm currently researching what students at {school} are working on "
+            "outside of school, like nonprofits, research, internships, or passion projects. "
+            "Are you working on any great projects or ideas?"
+        ),
+        "sections": {
+            "engaging_with_lead": {
+                "description": "Ask questions and validate their responses.",
+                "probes": {
+                    "initial_probe": (
+                        "What got you interested in that project/idea, especially with the "
+                        "high-stakes grind at {school}?"
+                    ),
+                    "pain_roadblock_probe": (
+                        "Anything holding it back? burnout from APs, lack of direction, "
+                        "or fitting it around everything else"
+                    ),
+                    "vision_aspiration_probe": (
+                        "What's your goal for it? Where do you see it going in the future?"
+                    ),
+                },
+            },
+            "relevance_context": {
+                "description": "Light touch context that keeps things personal.",
+                "script": (
+                    "I'm curious to see what students are doing outside of academics, "
+                    "since I'm working on building a school to optimize learning"
+                ),
+            },
+        },
+        "guidelines": [
+            "Ask follow-up questions to understand their project or idea deeply.",
+            "Show genuine interest and validate the student’s work.",
+            "Use the probes strategically based on what they’ve already shared.",
+            "Keep responses short, conversational, and natural.",
+        ],
+    },
+    "doing_the_ask": {
+        "name": "Selling / Doing the Ask",
+        "summary": (
+            "Introduce Prodicity naturally, highlight fit, and guide toward application."
+        ),
+        "sections": {
+            "introduction": {
+                "description": "Introduce Prodicity once the lead is engaged.",
+                "variants": [
+                    (
+                        "My close friend from {school} pointed me towards the students here. "
+                    ),
+                    (
+                        "They ran a quite successful nonprofit a few years ago."
+                    ),
+                    (
+                       "From what you've told me about {their_idea_pain_vision}, it seems like Prodicity could line up well. It's a selective fellowship for exceptional high schoolers, guided by mentors from Stanford, MIT, and similar institutions, to achieve tangible outcomes like internships, research positions, or successful startups/nonprofits next summer."
+                    ),
+                    (
+                       "We start in early 2026 with building up towards summer goals. If that sounds like a fit, I can share the application link. Let me know"
+                    ),
+                ],
+            },
+            "application": {
+                "description": "How to follow up when the lead shows interest.",
+                "script": (
+                    "Sure, apply here: https://app.prodicity.org/application\n\n"
+                    "Spots are limited, so if applying, aim to get it submitted by Nov 23rd, "
+                    "for interviews as we're finalizing applications"
+                ),
+                "cta_templates": [
+                    "If that sounds like a fit, I can share the application link. Let me know",
+                    "I can send over an application link if you'd be interested. Let me know",
+                    "If you're interested, I can share the application link",
+                ],
+            },
+            "social_proof": {
+                "description": "Recent student wins that demonstrate credibility.",
+                "script": (
+                    "Examples:\n\n"
+                    "Worked with a uk student on providing students with meaningful and impactful "
+                    "volunteering work throughout London: https://equitygroupuk.org/\n\n"
+                    "Interactive music sessions to improve the cognition and lives of elderly with "
+                    "neurodegenerative diseases, servicing most care facilities and rehabilitation efforts "
+                    "throughout dallas: https://www.musicforthemind.live/\n\n"
+                    "Mental wellness for high schoolers throughout the bay especially since it's a "
+                    "hypercompetitive environment which isn't that healthy for youth: "
+                    "https://www.linkedin.com/company/share-onnonprofit/\n\n"
+                    "These are the most recent ones but yeah, our students are quite fulfilled even if "
+                    "what they did was difficult since it was meaningful and had purpose"
+                ),
+            },
+            "call_scheduling": {
+                "description": "Offer a quick call if the lead seems strong.",
+                "script": (
+                    "Again, I don't usually do this but you seem like an interesting person so if you want, "
+                    "you can schedule a 10 minute call with me this Saturday morning/noon: "
+                    "https://calendly.com/theivanyeung/call"
+                ),
+            },
+            "pricing": {
+                "description": "Share the program fee when asked.",
+                "script": (
+                    "The application is free. If accepted, there's a program fee; it's on the premium side, "
+                    "but we have financial aid and scholarships based on need. It's $485/month with a "
+                    "$985 initial deposit. More details here: https://www.prodicity.org/fellowship"
+                ),
+            },
+        },
+        "guidelines": [
+            "Reference specific things the student told you about their project or pain points.",
+            "Keep tone casual and understated—no hard selling.",
+            "Offer the application link once they show interest.",
+            "Support with social proof or a friendly CTA when appropriate.",
+        ],
+    },
+}
+
+
+# --------------------------------------------------------------------------- #
+# Read helpers
+# --------------------------------------------------------------------------- #
+
+def list_phases() -> List[str]:
+    """Return the available phase identifiers."""
+    return list(PHASE_LIBRARY.keys())
+
+
+def get_phase_config(phase: str) -> Dict[str, Any]:
+    """Return the config dictionary for the requested phase."""
+    return PHASE_LIBRARY.get(phase, {})
+
+
+# --------------------------------------------------------------------------- #
+# Accessors for existing code paths (backwards compatible)
+# --------------------------------------------------------------------------- #
 
 def get_initial_message_template() -> str:
     """Template for the initial outreach message."""
     return (
-        "hey {name}, I'm currently researching what students at {school} are working on "
-        "outside of school, like nonprofits, research, internships, or passion projects. "
-        "Are you working on any great projects or ideas?"
+        PHASE_LIBRARY["building_rapport"]
+        .get("initial_message", "")
+        .strip()
     )
 
 
 def get_question_probes() -> Dict[str, str]:
     """Question probes to uncover motivation, pain points, and vision."""
-    return {
-        "initial_probe": (
-            "What got you interested in that project/idea, especially with the "
-            "high-stakes grind at {school}?"
-        ),
-        "pain_roadblock_probe": (
-            "Anything holding it back? burnout from APs, lack of direction, "
-            "or fitting it around everything else"
-        ),
-        "vision_aspiration_probe": (
-            "What's your goal for it? Where do you see it going in the future?"
-        ),
-    }
+    return (
+        PHASE_LIBRARY["building_rapport"]
+        .get("sections", {})
+        .get("engaging_with_lead", {})
+        .get("probes", {})
+    )
 
 
 def get_rapport_context() -> str:
     """Context information to introduce relevance."""
     return (
-        "I'm curious to see what students are doing outside of academics, "
-        "since I'm working on building a school to optimize learning"
+        PHASE_LIBRARY["building_rapport"]
+        .get("sections", {})
+        .get("relevance_context", {})
+        .get("script", "")
     )
 
 
-# ============================================================================
-# SELLING PHASE
-# ============================================================================
-
 def get_prodicity_introduction_variants() -> List[str]:
     """Variants for introducing Prodicity."""
-    return [
-        (
-            "My close friend from {school} pointed me towards the students here. "
-            "They ran a quite successful nonprofit a few years ago.\n\n"
-            "From what you've told me about {their_idea/pain/vision}, it seems like "
-            "Prodicity could line up well. It's a selective fellowship for exceptional "
-            "high schoolers, guided by mentors from Stanford, MIT, and similar institutions, "
-            "to achieve tangible outcomes like internships, research positions, or successful "
-            "startups/nonprofits next summer.\n\n"
-            "We start in early 2026 with building up towards summer goals. If that sounds "
-            "like a fit, I can share the application link. Let me know"
-        ),
-        (
-            "Based on our conversations, I think you'd be a solid fit. I usually don't do this, "
-            "but I can send over an application link if you'd be interested. Let me know"
-        ),
-    ]
+    return (
+        PHASE_LIBRARY["doing_the_ask"]
+        .get("sections", {})
+        .get("introduction", {})
+        .get("variants", [])
+    )
 
 
 def get_prodicity_examples() -> str:
     """Examples of past students' successful outcomes."""
     return (
-        "Examples:\n\n"
-        "Worked with a uk student on providing students with meaningful and impactful "
-        "volunteering work throughout London: https://equitygroupuk.org/\n\n"
-        "Interactive music sessions to improve the cognition and lives of elderly with "
-        "neurodegenerative diseases, servicing most care facilities and rehabilitation efforts "
-        "throughout dallas: https://www.musicforthemind.live/\n\n"
-        "Mental wellness for high schoolers throughout the bay especially since it's a "
-        "hypercompetitive environment which isn't that healthy for youth: "
-        "https://www.linkedin.com/company/share-onnonprofit/\n\n"
-        "These are the most recent ones but yeah, our students are quite fulfilled even if "
-        "what they did was difficult since it was meaningful and had purpose"
+        PHASE_LIBRARY["doing_the_ask"]
+        .get("sections", {})
+        .get("social_proof", {})
+        .get("script", "")
     )
 
 
 def get_application_info() -> str:
     """Application link and deadline information."""
     return (
-        "Sure, apply here: https://app.prodicity.org/application\n\n"
-        "Spots are limited, so if applying, aim to get it submitted by Nov 23nd, "
-        "for interviews as we're finalizing applications"
+        PHASE_LIBRARY["doing_the_ask"]
+        .get("sections", {})
+        .get("application", {})
+        .get("script", "")
     )
 
 
 def get_call_scheduling() -> str:
     """Call scheduling information."""
     return (
-        "Again, I don't usually do this but you seem like an interesting person so if you want, "
-        "you can schedule a 10 minute call with me this Saturday morning/noon: "
-        "https://calendly.com/theivanyeung/call"
+        PHASE_LIBRARY["doing_the_ask"]
+        .get("sections", {})
+        .get("call_scheduling", {})
+        .get("script", "")
     )
 
 
 def get_pricing_info() -> str:
     """Pricing and financial aid information."""
     return (
-        "The application is free. If accepted, there's a program fee; it's on the premium side, "
-        "but we have financial aid and scholarships based on need. It's $485/month with a "
-        "$985 initial deposit. More details here: https://www.prodicity.org/fellowship"
+        PHASE_LIBRARY["doing_the_ask"]
+        .get("sections", {})
+        .get("pricing", {})
+        .get("script", "")
     )
 
 
-# ============================================================================
-# PROMPT BLOCKS FOR LLM CONTEXT
-# ============================================================================
+# --------------------------------------------------------------------------- #
+# Prompt assembly helpers
+# --------------------------------------------------------------------------- #
 
 def get_prompt_blocks(phase: str) -> List[str]:
     """
     Return prompt blocks/guidance for the LLM based on the current phase.
     These provide context and guidance on what to say and how to progress.
     """
-    blocks = []
-    
+    config = get_phase_config(phase)
+    if not config:
+    return []
+
+    blocks: List[str] = [
+        f"PHASE: {config.get('name', phase).title()}",
+        "",
+        f"Goal: {config.get('summary', '')}",
+        "",
+    ]
+
+    sections = config.get("sections", {})
     if phase == "building_rapport":
-        blocks.extend([
-            "PHASE: Building Rapport",
-            "",
-            "Goal: Engage the lead, ask questions, validate their responses, and build trust.",
-            "",
-            "Available Question Probes:",
-            f"1. Initial Probe (uncover motivation): {get_question_probes()['initial_probe']}",
-            f"2. Pain/Roadblock Probe (highlight barriers): {get_question_probes()['pain_roadblock_probe']}",
-            f"3. Vision/Aspiration Probe (steer to impact): {get_question_probes()['vision_aspiration_probe']}",
-            "",
-            "Context to share when relevant:",
-            get_rapport_context(),
-            "",
-            "Guidelines:",
-            "- Ask follow-up questions to understand their project/idea deeply",
-            "- Show genuine interest and validate their work",
-            "- Use the probes strategically based on what they've shared",
-            "- Keep messages short and conversational",
-        ])
-    
-    elif phase == "doing_the_ask":
-        blocks.extend([
-            "PHASE: Selling / Introducing Prodicity",
-            "",
-            "Goal: Introduce Prodicity, highlight fit, and guide toward application.",
-            "",
-            "When to introduce Prodicity:",
-            "- Lead has shown engagement (answered questions, shared details about their project)",
-            "- You understand their motivation, pain points, or vision",
-            "- Sentiment is positive and engagement is high",
-            "",
-            "Introduction Approaches:",
-        ])
-        # Add introduction variants
-        for i, intro in enumerate(get_prodicity_introduction_variants(), 1):
-            blocks.append(f"{i}. {intro}")
+        probes = sections.get("engaging_with_lead", {}).get("probes", {})
+        if probes:
+            blocks.append("Available Question Probes:")
+            for idx, (key, value) in enumerate(probes.items(), 1):
+                label = key.replace("_", " ").title()
+                blocks.append(f"{idx}. {label}: {value}")
             blocks.append("")
-        
-        blocks.extend([
-            "When lead shows interest:",
-            get_application_info(),
-            "",
-            "Supporting Examples:",
-            get_prodicity_examples(),
-            "",
-            "Additional Options:",
-            "- If appropriate, offer to schedule a call: " + get_call_scheduling(),
-            "- If they ask about pricing: " + get_pricing_info(),
-            "",
-            "Guidelines:",
-            "- Reference specific things they've told you about their project/idea",
-            "- Make it personal and relevant to their situation",
-            "- Provide the application link when they show interest",
-            "- Be helpful and answer questions about the program",
-        ])
-    
+
+        context_text = get_rapport_context()
+        if context_text:
+            blocks.extend(
+                [
+                    "Context to share when relevant:",
+                    context_text,
+                    "",
+                ]
+            )
+
+    elif phase == "doing_the_ask":
+        intro_variants = get_prodicity_introduction_variants()
+        if intro_variants:
+            blocks.append("Introduction Approaches:")
+            for idx, intro in enumerate(intro_variants, 1):
+                blocks.append(f"{idx}. {intro}")
+                blocks.append("")
+
+        app_info = get_application_info()
+        if app_info:
+            blocks.extend(["When lead shows interest:", app_info, ""])
+
+        social_proof = get_prodicity_examples()
+        if social_proof:
+            blocks.extend(["Supporting Examples:", social_proof, ""])
+
+        call_script = get_call_scheduling()
+        price_script = get_pricing_info()
+        additional_lines: List[str] = []
+        if call_script:
+            additional_lines.append("- If appropriate, offer to schedule a call: " + call_script)
+        if price_script:
+            additional_lines.append("- If they ask about pricing: " + price_script)
+        if additional_lines:
+            blocks.extend(["Additional Options:", *additional_lines, ""])
+
+    guidelines = config.get("guidelines", [])
+    if guidelines:
+        blocks.extend(["Guidelines:"] + [f"- {line}" for line in guidelines])
+
     return blocks
 
 
 def cta_templates() -> List[str]:
     """Return CTA templates for the selling phase."""
-    return [
-        "If that sounds like a fit, I can share the application link. Let me know",
-        "I can send over an application link if you'd be interested. Let me know",
-        "If you're interested, I can share the application link",
-    ]
+    return (
+        PHASE_LIBRARY["doing_the_ask"]
+        .get("sections", {})
+        .get("application", {})
+        .get("cta_templates", [])
+    )
 
 
-# ============================================================================
-# CONVERSATION PROGRESSION HELPERS
-# ============================================================================
+# --------------------------------------------------------------------------- #
+# Conversation progression helpers
+# --------------------------------------------------------------------------- #
 
-def get_conversation_guidance(phase: str, conversation_state: Optional[Dict] = None) -> Dict[str, str]:
+def get_conversation_guidance(
+    phase: str,
+    conversation_state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Get guidance on how to progress the conversation based on phase and state.
-    
-    Returns:
-        Dict with 'next_step', 'key_questions', 'context_to_use', etc.
+
+    Returns a dictionary with:
+        phase, next_step, key_questions, context_to_use, cta_if_ready, examples, ready_to_introduce_prodicity
     """
-    guidance = {
+    guidance: Dict[str, Any] = {
         "phase": phase,
         "next_step": "",
         "key_questions": [],
         "context_to_use": "",
         "cta_if_ready": "",
+        "examples": "",
+        "ready_to_introduce_prodicity": False,
     }
-    
+
     if phase == "building_rapport":
         probes = get_question_probes()
-        guidance.update({
-            "next_step": "Ask probing questions to understand their motivation, pain points, and vision",
-            "key_questions": list(probes.values()),
-            "context_to_use": get_rapport_context(),
-            "ready_to_introduce_prodicity": False,
-        })
-        
-        # Check if we've gathered enough information
+        guidance.update(
+            {
+                "next_step": (
+                    "Ask probing questions to understand their motivation, pain points, and vision"
+                ),
+                "key_questions": list(probes.values()),
+                "context_to_use": get_rapport_context(),
+            }
+        )
+
         if conversation_state:
             messages_count = conversation_state.get("message_count", 0)
             prospect_messages = conversation_state.get("prospect_message_count", 0)
             has_questions = conversation_state.get("has_questions", False)
-            
+
             if messages_count >= 5 and prospect_messages >= 2 and has_questions:
                 guidance["ready_to_introduce_prodicity"] = True
-                guidance["next_step"] = "Consider introducing Prodicity if sentiment is positive"
-    
+                guidance[
+                    "next_step"
+                ] = "Consider introducing Prodicity if sentiment is positive"
+
     elif phase == "doing_the_ask":
-        guidance.update({
-            "next_step": "Introduce Prodicity and guide toward application",
-            "context_to_use": get_prodicity_introduction_variants()[0],
-            "cta_if_ready": get_application_info(),
-            "examples": get_prodicity_examples(),
-        })
-    
+        introduction_variants = get_prodicity_introduction_variants()
+        primary_intro = introduction_variants[0] if introduction_variants else ""
+        guidance.update(
+            {
+                "next_step": "Introduce Prodicity and guide toward application",
+                "context_to_use": primary_intro,
+                "cta_if_ready": get_application_info(),
+                "examples": get_prodicity_examples(),
+            }
+        )
+
     return guidance
 
 
@@ -253,12 +387,11 @@ def get_phase_specific_context(phase: str) -> str:
             "pain points, and vision. Use the provided question probes strategically. "
             "Keep messages short, conversational, and show genuine interest."
         )
-    elif phase == "doing_the_ask":
+    if phase == "doing_the_ask":
         return (
             "You are in the SELLING/DOING THE ASK phase. Your goal is to introduce Prodicity "
             "in a way that's relevant to what they've shared, highlight the fit, and guide them "
             "toward the application. Reference specific things they've told you. When they show "
             "interest, provide the application link and deadline information."
         )
-    else:
-        return f"You are in the {phase} phase."
+    return f"You are in the {phase} phase."

@@ -4,7 +4,6 @@ class DOMExtractor {
     this.supabaseService = new SupabaseService();
     this.aiService = new AIService();
     this.lastThreadId = null;
-    this.lastAutoSaveAt = 0;
     this.consoleEntries = [];
     this.responseHistoryByThread = {};
     this.kbStatusEl = null;
@@ -14,9 +13,11 @@ class DOMExtractor {
   init() {
     this.setupEventListeners();
     this.checkPageStatus();
-    // Start auto-save polling (side panel persists)
-    this.autoSaveInterval = setInterval(
-      () => this.autoSaveConversationIfNeeded(),
+    // Load conversation data when page loads or conversation changes
+    this.loadConversationOnChange();
+    // Check for conversation changes periodically (just to load/display, not save)
+    this.conversationCheckInterval = setInterval(
+      () => this.loadConversationOnChange(),
       3000
     );
   }
@@ -53,7 +54,35 @@ class DOMExtractor {
       saveKbBtn.addEventListener("click", () => this.saveKnowledgeEntry());
     }
 
+    const kbToggle = document.getElementById("kbToggle");
+    if (kbToggle) {
+      kbToggle.addEventListener("click", () => this.toggleKnowledgeBase());
+    }
+
+    const scriptsToggle = document.getElementById("scriptsToggle");
+    if (scriptsToggle) {
+      scriptsToggle.addEventListener("click", () => this.toggleScripts());
+    }
+
+    const placeholdersToggle = document.getElementById("placeholdersToggle");
+    if (placeholdersToggle) {
+      placeholdersToggle.addEventListener("click", () => this.togglePlaceholders());
+    }
+
     this.kbStatusEl = document.getElementById("kbStatusMessage");
+    
+    const updateStatusBtn = document.getElementById("updateStatusBtn");
+    if (updateStatusBtn) {
+      updateStatusBtn.addEventListener("click", () => this.updateLeadStatus());
+    }
+    
+    const updatePlaceholdersBtn = document.getElementById("updatePlaceholdersBtn");
+    if (updatePlaceholdersBtn) {
+      updatePlaceholdersBtn.addEventListener("click", () => this.updatePlaceholders());
+    }
+    
+    // Load scripts on init
+    this.loadScripts();
   }
 
   async checkPageStatus() {
@@ -78,6 +107,7 @@ class DOMExtractor {
 
   async generateFromCloud() {
     try {
+      this.addConsoleLog("FLOW", "Starting generateFromCloud", {});
       this.setStatus("Thinking", "Fetching from cloud and generating...");
       const [tab] = await chrome.tabs.query({
         active: true,
@@ -96,23 +126,52 @@ class DOMExtractor {
       // Fetch conversation from Supabase
       const convo = await this.supabaseService.getConversation(threadId);
       if (!convo || !convo.messages || !convo.messages.length) {
+        this.addConsoleLog("SUPABASE", "No conversation found in cloud", { threadId });
         throw new Error(
           "No conversation data in cloud. Click Update Cloud first."
         );
       }
+      this.addConsoleLog("SUPABASE", "Fetched conversation", {
+        threadId,
+        messageCount: convo.messages.length,
+        status: convo.status || "unknown",
+      });
+      
+      // Update lead card with status from conversation
+      this.updateLeadCard({
+        name: convo.title || (convo.placeholders?.name) || "—",
+        description: convo.description || "",
+        status: convo.status || "unknown",
+        placeholders: convo.placeholders || {},
+      });
 
       // Ensure AI is available
+      this.addConsoleLog("FLOW", "Checking AI service health", {
+        baseUrl: this.aiService.baseUrl,
+      });
       const healthy = await this.aiService.checkHealth();
-      if (!healthy)
+      if (!healthy) {
+        this.addConsoleLog("AI", "Health check failed", {});
         throw new Error(
           "AI service not running (cd ai_module && python main.py)"
         );
+      }
+      this.addConsoleLog("AI", "Service healthy", {});
 
       // Generate
+      this.addConsoleLog("AI", "Requesting /generate", {
+        phase: convo.phase,
+        messageCount: convo.messages.length,
+      });
       const aiResult = await this.aiService.generateResponse(
         convo,
         convo.prospectName || convo.title || ""
       );
+      this.addConsoleLog("AI", "Received /generate result", {
+        phase: aiResult.phase,
+        readyForAsk: aiResult.ready_for_ask,
+        knowledgeSnippets: aiResult.input?.knowledge_context?.length || 0,
+      });
 
       // Show suggested response in the top bar and add to history
       this.setStatus("Suggested", aiResult.response);
@@ -122,6 +181,7 @@ class DOMExtractor {
       this.updatePhaseDisplay(aiResult.phase);
 
       // Inject
+      this.addConsoleLog("UI", "Injecting response into LinkedIn", { threadId });
       await this.aiService.injectResponse(aiResult.response, tab.id);
       this.addConsoleLog("AI", "Generated from cloud", {
         threadId,
@@ -131,6 +191,7 @@ class DOMExtractor {
     } catch (e) {
       console.error("GenerateFromCloud failed:", e);
       this.setStatus("Error", e.message || "Failed generating from cloud");
+      this.addConsoleLog("ERROR", "generateFromCloud failed", { error: e.message });
     }
   }
 
@@ -154,13 +215,199 @@ class DOMExtractor {
     } catch (_) {}
   }
 
-  updateLeadCard({ name = "—", description = "", dataHtml = "" } = {}) {
+  updateLeadCard({ name = "—", description = "", dataHtml = "", status = "unknown", placeholders = {} } = {}) {
     const nameEl = document.getElementById("leadName");
     const descEl = document.getElementById("leadDescription");
     const dataEl = document.getElementById("leadData");
+    const statusSelect = document.getElementById("leadStatusSelect");
+    const leadCard = document.getElementById("leadCard");
+    
+    // Placeholder input fields
+    const placeholderNameInput = document.getElementById("placeholderName");
+    const placeholderSchoolInput = document.getElementById("placeholderSchool");
+    const placeholderIdeaInput = document.getElementById("placeholderIdea");
+    
+    // Update status class on lead card for color coding
+    if (leadCard) {
+      // Remove all status classes
+      leadCard.classList.remove("status-unknown", "status-interested", "status-enrolled", "status-ambassador", "status-uninterested");
+      // Add the current status class
+      if (status) {
+        leadCard.classList.add(`status-${status}`);
+      } else {
+        leadCard.classList.add("status-unknown");
+      }
+    }
+    
     if (nameEl) nameEl.textContent = `Lead: ${name}`;
-    if (descEl) descEl.textContent = description || "";
+    if (descEl) {
+      descEl.textContent = description || "";
+    }
     if (dataEl) dataEl.innerHTML = dataHtml || "";
+    if (statusSelect && status) {
+      statusSelect.value = status;
+    }
+    
+    // Update placeholder input fields
+    if (placeholderNameInput) {
+      placeholderNameInput.value = placeholders.name || "";
+      placeholderNameInput.title = placeholders.name || "Name placeholder";
+    }
+    if (placeholderSchoolInput) {
+      placeholderSchoolInput.value = placeholders.school || "";
+      placeholderSchoolInput.title = placeholders.school || "School placeholder";
+    }
+    if (placeholderIdeaInput) {
+      placeholderIdeaInput.value = placeholders.their_idea_pain_vision || "";
+      placeholderIdeaInput.title = placeholders.their_idea_pain_vision || "Idea/Vision placeholder";
+    }
+    
+    // Update placeholder toggle button text with actual values (compact, no wrap)
+    const placeholdersToggleText = document.getElementById("placeholdersToggleText");
+    if (placeholdersToggleText) {
+      const toggleParts = [];
+      if (placeholders.name) toggleParts.push(`${placeholders.name}`);
+      if (placeholders.school) toggleParts.push(`${placeholders.school}`);
+      // Don't include idea/vision in header to keep it compact
+      
+      if (toggleParts.length > 0) {
+        // Format: "Name • School" - simple and compact
+        placeholdersToggleText.textContent = toggleParts.join(" • ");
+        // Add title attribute for full text on hover
+        placeholdersToggleText.title = `Name: ${placeholders.name || "—"} • School: ${placeholders.school || "—"}${placeholders.their_idea_pain_vision ? ` • Idea: ${placeholders.their_idea_pain_vision}` : ""}`;
+      } else {
+        placeholdersToggleText.textContent = "Placeholders";
+        placeholdersToggleText.title = "Click to edit placeholder values";
+      }
+    }
+  }
+
+  async updateLeadStatus() {
+    const statusSelect = document.getElementById("leadStatusSelect");
+    const updateBtn = document.getElementById("updateStatusBtn");
+    
+    if (!statusSelect || !updateBtn) return;
+    
+    const status = statusSelect.value;
+    const threadId = await this.getActiveThreadId();
+    
+    if (!threadId) {
+      alert("Please open a LinkedIn conversation thread first.");
+      return;
+    }
+    
+    try {
+      updateBtn.disabled = true;
+      updateBtn.textContent = "Updating...";
+      
+      await this.supabaseService.updateLeadStatus(threadId, status);
+      
+      this.addConsoleLog("CRM", "Status updated", { threadId, status });
+      updateBtn.textContent = "✅ Updated";
+      
+      // Update lead card to reflect new status color immediately
+      const leadCard = document.getElementById("leadCard");
+      if (leadCard) {
+        // Remove all status classes
+        leadCard.classList.remove("status-unknown", "status-interested", "status-enrolled", "status-ambassador", "status-uninterested");
+        // Add the new status class
+        leadCard.classList.add(`status-${status}`);
+      }
+      
+      setTimeout(() => {
+        updateBtn.textContent = "Update";
+        updateBtn.disabled = false;
+      }, 2000);
+    } catch (error) {
+      console.error("Error updating lead status:", error);
+      this.addConsoleLog("CRM", "Status update failed", { error: error.message });
+      alert(`Failed to update status: ${error.message}`);
+      updateBtn.textContent = "Update";
+      updateBtn.disabled = false;
+    }
+  }
+
+  async updatePlaceholders() {
+    const updateBtn = document.getElementById("updatePlaceholdersBtn");
+    const nameInput = document.getElementById("placeholderName");
+    const schoolInput = document.getElementById("placeholderSchool");
+    const ideaInput = document.getElementById("placeholderIdea");
+    
+    if (!updateBtn) return;
+    
+    const threadId = await this.getActiveThreadId();
+    
+    if (!threadId) {
+      alert("Please open a LinkedIn conversation thread first.");
+      return;
+    }
+    
+    // Get placeholder values from inputs
+    const placeholders = {
+      name: nameInput?.value.trim() || null,
+      school: schoolInput?.value.trim() || null,
+      their_idea_pain_vision: ideaInput?.value.trim() || null,
+    };
+    
+    // Remove empty strings and convert to null
+    if (placeholders.name === "") placeholders.name = null;
+    if (placeholders.school === "") placeholders.school = null;
+    if (placeholders.their_idea_pain_vision === "") placeholders.their_idea_pain_vision = null;
+    
+    try {
+      updateBtn.disabled = true;
+      updateBtn.textContent = "Saving...";
+      
+      // Get existing conversation to preserve other fields
+      const existing = await this.supabaseService.getConversation(threadId);
+      
+      if (existing) {
+        // Update conversation with new placeholders
+        await this.supabaseService.saveConversation({
+          threadId: existing.thread_id || threadId,
+          title: existing.title,
+          description: existing.description,
+          url: existing.url,
+          messages: existing.messages || [],
+          status: existing.status || "unknown",
+          placeholders: placeholders, // Use the edited placeholders
+        });
+      } else {
+        // If conversation doesn't exist, we need to create it
+        // But we don't have messages, so we can't create it properly
+        this.addConsoleLog("PLACEHOLDERS", "Cannot update placeholders - conversation not found", { threadId });
+        alert("Please extract the conversation first by clicking 'Update Cloud'.");
+        updateBtn.textContent = "Save Placeholders";
+        updateBtn.disabled = false;
+        return;
+      }
+      
+      this.addConsoleLog("PLACEHOLDERS", "Placeholders updated", { threadId, placeholders });
+      updateBtn.textContent = "✅ Saved";
+      
+      // Update the UI immediately to reflect saved placeholders
+      // Refresh the lead card to update toggle text and summary
+      const updated = await this.supabaseService.getConversation(threadId);
+      if (updated) {
+        this.updateLeadCard({
+          name: updated.title || (updated.placeholders?.name) || "—",
+          description: updated.description || "",
+          status: updated.status || "unknown",
+          placeholders: updated.placeholders || placeholders,
+        });
+      }
+      
+      setTimeout(() => {
+        updateBtn.textContent = "Save Placeholders";
+        updateBtn.disabled = false;
+      }, 2000);
+    } catch (error) {
+      console.error("Error updating placeholders:", error);
+      this.addConsoleLog("PLACEHOLDERS", "Placeholder update failed", { error: error.message });
+      alert(`Failed to update placeholders: ${error.message}`);
+      updateBtn.textContent = "Save Placeholders";
+      updateBtn.disabled = false;
+    }
   }
 
   updatePhaseDisplay(phase) {
@@ -756,7 +1003,7 @@ class DOMExtractor {
     }
   }
 
-  async autoSaveConversationIfNeeded() {
+  async loadConversationOnChange() {
     try {
       const [tab] = await chrome.tabs.query({
         active: true,
@@ -769,54 +1016,154 @@ class DOMExtractor {
       )
         return;
       const threadId = tab.url.match(/\/thread\/([^\/\?]+)/)?.[1];
-      const now = Date.now();
-      const throttleMs = 30000; // 30s
-      const timeOk = now - this.lastAutoSaveAt > throttleMs;
+      if (!threadId) return;
+      
       const changed = threadId && threadId !== this.lastThreadId;
-      if (!changed && !timeOk) return;
-
-      const convo = await this.extractConversationFromActiveTab(tab.id);
-      if (convo && !convo.error) {
-        this.addConsoleLog("DB", "Auto-save triggered", { threadId });
-        await this.persistConversation(convo);
-        this.lastThreadId = convo.threadId;
-        this.lastAutoSaveAt = now;
-
-        // Update lead card with proper title and description
-        const prospectTitle = convo.title || "";
-        const prospectDescription = convo.description || "";
-
-        // For the UI, show: Name as title, Description as description
-        const displayName = prospectTitle || "—";
-        const displayDescription =
-          prospectDescription || prospectTitle || "No description available";
-
-        const dataHtml = `
-          <div>Messages: ${convo.messages.length}</div>
-          <div>Last updated: ${new Date(
-            convo.extractedAt || Date.now()
-          ).toLocaleString()}</div>
-        `;
-        this.updateLeadCard({
-          name: displayName,
-          description: displayDescription,
-          dataHtml,
-        });
-        this.setStatus("Synced", `Conversation ${convo.threadId} saved`);
-
-        // After saving/updating in cloud, auto-generate and inject a response
-        try {
-          this.addConsoleLog("AI", "Auto-generating after save", { threadId });
-          await this.autoGenerateFromCloud(threadId);
-        } catch (e) {
-          this.addConsoleLog("AI", "Auto-generate failed (non-blocking)", {
-            error: e.message,
+      
+      // Only load if conversation changed
+      if (!changed) return;
+      
+      // Load existing conversation from Supabase to display in UI
+      try {
+        const existing = await this.supabaseService.getConversation(threadId);
+        if (existing) {
+          // EXISTING CONVERSATION: Update placeholders only
+          // ALWAYS re-extract placeholders from the actual initial message (not from profile)
+          // This ensures we use exact values from the message (e.g., "Ari" not "Ari Zhang", "dvhs" not "Dougherty Valley High School")
+          try {
+            this.addConsoleLog("PLACEHOLDERS", "Re-extracting placeholders from actual initial message (overwriting any profile data)", { 
+              threadId,
+              messageCount: existing.messages?.length || 0
+            });
+            const extractedPlaceholders = await this.extractPlaceholdersFromTemplate(existing);
+            
+            // ALWAYS overwrite placeholders with extracted ones (even if empty) to clear any profile data
+            // This ensures we never keep old profile-based placeholders
+            // NOTE: We keep existing title, description, url, status - only update placeholders
+            await this.supabaseService.saveConversation({
+              threadId: existing.thread_id || threadId,
+              title: existing.title, // Keep existing title (don't overwrite)
+              description: existing.description, // Keep existing description (don't overwrite)
+              url: existing.url || null, // Keep existing URL (don't overwrite)
+              messages: existing.messages || [],
+              status: existing.status || "unknown",
+              placeholders: extractedPlaceholders || {}, // Always overwrite placeholders - empty object clears profile data
+            });
+            
+            // Update local existing object
+            existing.placeholders = extractedPlaceholders || {};
+            
+            if (extractedPlaceholders && Object.keys(extractedPlaceholders).length > 0) {
+              this.addConsoleLog("PLACEHOLDERS", "Saved placeholders from message only (overwrote any profile data)", {
+                placeholders: extractedPlaceholders,
+                source: "initial_message_only"
+              });
+            } else {
+              this.addConsoleLog("PLACEHOLDERS", "No placeholders found in message - cleared any existing profile data", {
+                firstMessage: existing.messages?.find(m => m.sender === "you")?.text?.substring(0, 200) || "no 'you' messages found",
+                clearedPlaceholders: true
+              });
+            }
+          } catch (e) {
+            this.addConsoleLog("PLACEHOLDERS", "Failed to extract placeholders from message", {
+              error: e.message
+            });
+          }
+          
+          // Update UI with existing data from Supabase
+          const dataHtml = `
+            <div>Messages: ${existing.messages?.length || 0}</div>
+            <div>Last updated: ${existing.updated_at ? new Date(existing.updated_at).toLocaleString() : '—'}</div>
+          `;
+          this.updateLeadCard({
+            name: existing.title || (existing.placeholders?.name) || "—",
+            description: existing.description || "",
+            dataHtml,
+            status: existing.status || "unknown",
+            placeholders: existing.placeholders || {},
           });
+          this.addConsoleLog("DB", "Loaded conversation from Supabase", { 
+            threadId,
+            messageCount: existing.messages?.length || 0,
+            hasPlaceholders: !!(existing.placeholders && Object.keys(existing.placeholders).length > 0)
+          });
+          this.setStatus("Ready", `Loaded conversation ${threadId}`);
+        } else {
+          // NEW CONVERSATION: Extract from DOM and save to Supabase automatically
+          this.addConsoleLog("DB", "New conversation detected - extracting from DOM and saving", { threadId });
+          
+          try {
+            // Extract conversation from DOM
+            const convo = await this.extractConversationFromActiveTab(tab.id);
+            if (convo && !convo.error && convo.messages && convo.messages.length > 0) {
+              // Extract placeholders from the initial message
+              const extractedPlaceholders = await this.extractPlaceholdersFromTemplate(convo);
+              convo.placeholders = extractedPlaceholders || {};
+              
+              // Save to Supabase
+              await this.persistConversation(convo);
+              
+              // Update UI with saved data
+              const dataHtml = `
+                <div>Messages: ${convo.messages.length}</div>
+                <div>Saved: ${new Date().toLocaleString()}</div>
+              `;
+              this.updateLeadCard({
+                name: convo.title || (convo.placeholders?.name) || "—",
+                description: convo.description || "",
+                dataHtml,
+                status: "unknown",
+                placeholders: convo.placeholders || {},
+              });
+              
+              this.addConsoleLog("DB", "Saved new conversation to Supabase", {
+                threadId,
+                messageCount: convo.messages.length,
+                title: convo.title,
+                url: convo.url,
+                placeholders: convo.placeholders,
+              });
+              this.setStatus("Ready", `Saved new conversation ${threadId}`);
+            } else {
+              // Extraction failed or no messages
+              this.updateLeadCard({
+                name: "—",
+                description: "",
+                dataHtml: "<div>Could not extract conversation. Make sure you're on a LinkedIn message thread.</div>",
+                status: "unknown",
+                placeholders: {},
+              });
+              this.addConsoleLog("DB", "Failed to extract conversation from DOM", {
+                threadId,
+                error: convo?.error || "No messages found",
+              });
+              this.setStatus("Error", "Could not extract conversation");
+            }
+          } catch (error) {
+            this.addConsoleLog("DB", "Error extracting and saving new conversation", {
+              error: error.message,
+              threadId,
+            });
+            this.updateLeadCard({
+              name: "—",
+              description: "",
+              dataHtml: "<div>Error saving conversation. Click 'Update Cloud' to retry.</div>",
+              status: "unknown",
+              placeholders: {},
+            });
+            this.setStatus("Error", `Failed to save: ${error.message}`);
+          }
         }
+        this.lastThreadId = threadId;
+      } catch (e) {
+        this.addConsoleLog("DB", "Failed to load conversation", { 
+          error: e.message,
+          threadId,
+        });
       }
     } catch (e) {
       // Silent fail to avoid noisy UI
-      console.warn("Auto-save failed:", e);
+      console.warn("Load conversation failed:", e);
     }
   }
 
@@ -842,12 +1189,72 @@ class DOMExtractor {
       }
       const convo = await this.extractConversationFromActiveTab(tab.id);
       if (convo && !convo.error) {
+        // Get existing conversation to preserve existing placeholders
+        const existing = await this.supabaseService.getConversation(convo.threadId);
+        const existingPlaceholders = existing?.placeholders || {};
+        
+        // Extract placeholders from the actual initial message ONLY (not from profile)
+        // Use the conversation that has the messages (prefer existing from Supabase if available, otherwise use newly extracted)
+        let conversationForExtraction = existing && existing.messages && existing.messages.length > 0 ? existing : convo;
+        const extractedPlaceholders = await this.extractPlaceholdersFromTemplate(conversationForExtraction);
+        
+        // Use ONLY extracted placeholders from the message - don't merge with profile data
+        // This ensures we get exact values like "Ari" not "Ari Zhang", "dvhs" not "Dougherty Valley High School"
+        convo.placeholders = extractedPlaceholders || {};
+        
+        // IMPORTANT: When updating, preserve existing title/description/url if they exist and are good
+        // Only update if the new extracted data is better (not corrupted with status indicators)
+        // But always update placeholders from message
+        if (existing) {
+          // Keep existing title/description if they don't contain status indicators
+          // (existing ones were probably cleaned properly when first saved)
+          const existingTitleIsClean = existing.title && 
+            !existing.title.includes("Mobile") && 
+            !existing.title.includes("•") &&
+            !existing.title.match(/\d+[wdhms]\s+ago/i);
+          
+          if (existingTitleIsClean && existing.title !== "Unknown") {
+            convo.title = existing.title;
+          }
+          
+          if (existing.description && existing.description.length > 0) {
+            convo.description = existing.description;
+          }
+          
+          if (existing.url) {
+            convo.url = existing.url;
+          }
+        }
+        
         this.addConsoleLog("DB", "Manual update triggered", {
           threadId: convo.threadId,
+          extracted: extractedPlaceholders,
+          title: convo.title,
+          description: convo.description,
+          url: convo.url,
         });
         await this.persistConversation(convo);
+        
+        // Update UI with saved data
+        const dataHtml = `
+          <div>Messages: ${convo.messages.length}</div>
+          <div>Last updated: ${new Date(
+            convo.extractedAt || Date.now()
+          ).toLocaleString()}</div>
+        `;
+        const displayName = convo.title || (convo.placeholders?.name) || "—";
+        const displayDescription = convo.description || "No description available";
+        this.updateLeadCard({
+          name: displayName,
+          description: displayDescription,
+          dataHtml,
+          status: convo.status || existing?.status || "unknown",
+          placeholders: convo.placeholders || {},
+        });
+        
         this.setStatus("Synced", `Conversation ${convo.threadId} updated`);
         if (btn) btn.textContent = "✅ Updated";
+        this.lastThreadId = convo.threadId;
       } else {
         throw new Error(
           convo && convo.error ? convo.error : "Extraction failed"
@@ -881,6 +1288,13 @@ class DOMExtractor {
         threadId,
       });
       return;
+    }
+    
+    // Update lead card with status if available
+    if (convo.status) {
+      this.updateLeadCard({
+        status: convo.status,
+      });
     }
 
     // Generate
@@ -1140,116 +1554,153 @@ class DOMExtractor {
           } catch (e) {}
         });
 
-        // After messages collected, compute clean lead name and backfill senderName for prospect messages
-        const clean = (s) =>
-          (s || "")
-            .replace(/Status\s+is\s+\w+/gi, "")
-            .replace(/Available on mobile/gi, "")
-            .replace(/[\n\t]+/g, " ")
+        // Enhanced clean function to remove ALL LinkedIn status indicators, timestamps, and mobile indicators
+        const clean = (s) => {
+          if (!s) return "";
+          let cleaned = s
+            // Remove status indicators
+            .replace(/Status\s+is\s+(offline|online|away|busy)/gi, "")
+            .replace(/Available\s+on\s+mobile/gi, "")
+            .replace(/Mobile/gi, "")
+            // Remove timestamps like "• 1w ago", "• 2d ago", "• 3h ago"
+            .replace(/\s*•\s*\d+[wdhms]\s+ago/gi, "")
+            .replace(/\s*•\s*\d+\s+(week|day|hour|minute|second)s?\s+ago/gi, "")
+            // Remove job title prefixes like "Group General Manager @"
+            .replace(/\s*@\s*[^•]+/g, "") // Remove everything after @
+            // Remove common LinkedIn prefixes
+            .replace(/^\s*1st\s+degree\s+connection\s*•?\s*/i, "")
+            .replace(/^\s*2nd\s+degree\s+connection\s*•?\s*/i, "")
+            .replace(/^\s*3rd\s+degree\s+connection\s*•?\s*/i, "")
+            // Remove pipes and dashes used as separators
+            .replace(/^[|\s\-•]+|[|\s\-•]+$/g, "")
+            // Normalize whitespace
+            .replace(/[\n\t\r]+/g, " ")
             .replace(/\s{2,}/g, " ")
             .trim();
-        let leadName = "";
-        const profileLinkBackfill = document.querySelector(
-          ".msg-thread__link-to-profile"
-        );
-        if (profileLinkBackfill) {
-          leadName = clean(profileLinkBackfill.textContent || "");
-        }
-        if (leadName) {
-          messages.forEach((m) => {
-            if (m.sender !== "you" && !m.senderName) m.senderName = leadName;
-          });
-        }
+          return cleaned;
+        };
+
         // Extract prospect name, title, and description from LinkedIn DOM
+        // IMPORTANT: Name and status are in SEPARATE elements - target the name element specifically
         let prospectName = "Unknown";
         let prospectTitle = "";
         let prospectDescription = "";
 
-        const profileLink = activeConversationThread.querySelector(
-          ".msg-thread__link-to-profile"
-        );
+        // Try multiple selectors to find the NAME element specifically (not the container with status)
+        // Based on LinkedIn DOM structure: name is in .msg-entity-lockup__entity-title (h2)
+        // Status is in a separate .visually-hidden span, title is in .msg-entity-lockup__entity-info
+        const nameSelectors = [
+          ".msg-entity-lockup__entity-title", // Main name element (h2) - MOST RELIABLE
+          ".msg-entity-lockup__entity-title h2", // Nested h2 if needed
+          ".msg-s-profile-card__name", // Alternative name class
+          "span.msg-s-profile-card__profile-link", // Name span
+          ".msg-thread__link-to-profile .msg-entity-lockup__entity-title", // Scoped to profile link
+          ".msg-thread__link-to-profile h2", // h2 inside profile link
+          "[data-test-id='profile-name']", // Test ID if available
+        ];
 
-        if (profileLink) {
-          const fullText = profileLink.textContent.trim();
+        let nameElement = null;
+        for (const selector of nameSelectors) {
+          nameElement = activeConversationThread.querySelector(selector);
+          if (nameElement && nameElement.textContent && nameElement.textContent.trim()) {
+            // Found a name element - use it directly (it's already isolated from status)
+            prospectName = nameElement.textContent.trim();
+            break;
+          }
+        }
 
-          // Pattern: "Name Status is offline Title | Description" or "Name Status is online Title"
-          // Step 1: Find and extract the name (everything before "Status")
-          const statusMatch = fullText.match(/Status\s+is\s+(offline|online)/i);
-
-          if (statusMatch && statusMatch.index !== undefined) {
-            // Name is everything before "Status"
-            prospectName = fullText.substring(0, statusMatch.index).trim();
-
-            // Everything after "Status is offline/online" is the title/description
-            const statusEndIndex = statusMatch.index + statusMatch[0].length;
-            const afterStatus = fullText.substring(statusEndIndex).trim();
-
-            if (afterStatus) {
-              // Clean up: remove leading pipes, extra whitespace
-              prospectDescription = afterStatus
-                .replace(/^[|\s\-]+|[|\s\-]+$/g, "")
-                .trim();
-              prospectTitle = prospectDescription;
-            }
-          } else {
-            // No status found - try alternative methods
-            // Try to find name in a child element first
-            const nameElement = profileLink.querySelector(
-              "span[aria-label], .msg-s-profile-card__name, span.msg-s-profile-card__profile-link"
-            );
-
-            if (nameElement) {
-              prospectName = nameElement.textContent.trim();
-              // Get description from headline element or remaining text
-              const headlineEl = activeConversationThread.querySelector(
-                ".msg-s-profile-card__headline, .msg-thread__headline"
-              );
-              if (headlineEl) {
-                prospectDescription = headlineEl.textContent.trim();
-                prospectTitle = prospectDescription;
+        // If we didn't find a specific name element, try the profile link but extract carefully
+        if (!nameElement || prospectName === "Unknown") {
+          const profileLink = activeConversationThread.querySelector(
+            ".msg-thread__link-to-profile"
+          );
+          
+          if (profileLink) {
+            // Look for the entity lockup structure
+            const entityLockup = profileLink.querySelector(".msg-entity-lockup");
+            if (entityLockup) {
+              const titleEl = entityLockup.querySelector(".msg-entity-lockup__entity-title, h2");
+              if (titleEl && titleEl.textContent) {
+                prospectName = titleEl.textContent.trim();
               }
-            } else {
-              // Fallback: assume full text is name if no status found
-              prospectName = fullText;
             }
-          }
-
-          // Try to find headline in separate element (overrides if found)
-          const headlineEl = activeConversationThread.querySelector(
-            '.msg-s-profile-card__headline, .msg-thread__headline, [data-test-id="headline"]'
-          );
-          if (headlineEl && headlineEl.textContent.trim()) {
-            prospectTitle = headlineEl.textContent.trim();
-            prospectDescription = prospectTitle;
-          }
-
-          // Stronger selector: LinkedIn profile card subtitle with title attribute
-          // Example seen in DOM snapshots: div#ember661.artdeco-entity-lockup__subtitle > div[title]
-          const subtitleDiv = activeConversationThread.querySelector(
-            ".artdeco-entity-lockup__subtitle div[title]"
-          );
-          if (subtitleDiv) {
-            const subText = (
-              subtitleDiv.getAttribute("title") ||
-              subtitleDiv.textContent ||
-              ""
-            ).trim();
-            if (subText) {
-              prospectDescription = subText;
-              prospectTitle = subText;
+            
+            // Last resort: look for h2 or first meaningful text node
+            if (prospectName === "Unknown") {
+              const h2El = profileLink.querySelector("h2");
+              if (h2El && h2El.textContent) {
+                prospectName = h2El.textContent.trim();
+              } else {
+                // Try first direct child text
+                const directNameChild = profileLink.querySelector(":scope > *");
+                if (directNameChild && directNameChild.textContent) {
+                  const text = directNameChild.textContent.trim();
+                  // Filter out if it contains status indicators
+                  if (!text.match(/Status|Mobile|ago|•/i) && !text.match(/\d+[wdhms]/)) {
+                    prospectName = text;
+                  }
+                }
+              }
             }
           }
         }
 
-        // Clean name strictly (remove status/mobile) and collapse whitespace (reuse clean from above)
-        const cleanName =
-          clean(prospectName || prospectTitle || "Unknown") || "Unknown";
+        // Clean the name (should already be clean, but just in case)
+        prospectName = clean(prospectName) || "Unknown";
+
+        // Extract title/description from SEPARATE entity-info element (not from name element)
+        // Based on DOM: title is in .msg-entity-lockup__entity-info, separate from name
+        const headlineSelectors = [
+          '.msg-entity-lockup__entity-info', // Main title/description element - MOST RELIABLE
+          '.msg-entity-lockup__presence-status', // Status container (contains title)
+          '.msg-s-profile-card__headline',
+          '.msg-thread__headline',
+          '[data-test-id="headline"]',
+          '.artdeco-entity-lockup__subtitle',
+          '.artdeco-entity-lockup__subtitle div[title]',
+          '.artdeco-entity-lockup__subtitle[title]',
+        ];
+
+        for (const selector of headlineSelectors) {
+          const headlineEl = activeConversationThread.querySelector(selector);
+          if (headlineEl) {
+            // Get text but exclude visually-hidden status text
+            let headlineText = "";
+            const allTextNodes = [];
+            headlineEl.childNodes.forEach(node => {
+              // Skip visually-hidden elements (they contain status)
+              if (node.nodeType === Node.TEXT_NODE) {
+                allTextNodes.push(node.textContent);
+              } else if (node.nodeType === Node.ELEMENT_NODE && 
+                         !node.classList.contains('visually-hidden') &&
+                         !node.classList.contains('msg-entity-lockup__presence-indicator')) {
+                // Get text from non-hidden elements
+                const text = node.textContent || node.getAttribute("title") || "";
+                if (text.trim()) {
+                  allTextNodes.push(text);
+                }
+              }
+            });
+            
+            headlineText = allTextNodes.join(" ").trim() || headlineEl.getAttribute("title") || "";
+            
+            if (headlineText.trim()) {
+              prospectDescription = clean(headlineText);
+              prospectTitle = prospectDescription;
+              break; // Use first found headline
+            }
+          }
+        }
+
+        // Final cleanup - ensure name is clean
+        const cleanName = clean(prospectName) || "Unknown";
         const cleanDescription = clean(prospectDescription || "");
 
         return {
           threadId,
           title: cleanName,
           description: cleanDescription,
+          prospectName: cleanName,
           messages,
           url: window.location.href,
           extractedAt: new Date().toISOString(),
@@ -1259,6 +1710,462 @@ class DOMExtractor {
     return results && results[0] && results[0].result
       ? results[0].result
       : { error: "No result" };
+  }
+
+  /**
+   * Extract placeholders by comparing the first message (index 0) with the initial message template
+   * IMPORTANT: Only extracts from the actual initial message text, NOT from profile/description
+   * Uses template comparison to extract {name} and {school} placeholders
+   * Returns a map of placeholder keys to values
+   */
+  async extractPlaceholdersFromTemplate(conversation) {
+    const placeholders = {};
+    
+    try {
+      // Get the template from the backend
+      let template = "";
+      try {
+        const templateResponse = await this.aiService.getInitialMessageTemplate();
+        template = templateResponse.template || "";
+        this.addConsoleLog("PLACEHOLDERS", "Loaded template from backend", {
+          template: template.substring(0, 100) + "...",
+          templateLength: template.length
+        });
+      } catch (error) {
+        this.addConsoleLog("PLACEHOLDERS", "Failed to load template, using fallback", {
+          error: error.message
+        });
+        // Fallback template
+        template = "hey {name}, I'm currently researching what students at {school} are working on outside of school, like nonprofits, research, internships, or passion projects. Are you working on any great projects or ideas?";
+      }
+      
+      // Get the FIRST message (index 0) from the conversation messages
+      // The user confirmed this is the initial message
+      const messages = conversation.messages || [];
+      if (messages.length === 0) {
+        this.addConsoleLog("PLACEHOLDERS", "No messages in conversation", {});
+        return {
+          name: null,
+          school: null,
+          their_idea_pain_vision: null,
+        };
+      }
+      
+      // Get message at index 0 (first message)
+      // Sort messages by index to ensure we get index 0
+      const sortedMessages = [...messages].sort((a, b) => (a.index || 0) - (b.index || 0));
+      const firstMessage = sortedMessages[0];
+      
+      // Verify it's from "you" (should always be for initial messages)
+      const sender = firstMessage.sender || "";
+      const isFromYou = firstMessage.isFromYou === true || sender === "you";
+      
+      if (!isFromYou) {
+        this.addConsoleLog("PLACEHOLDERS", "First message (index 0) is not from 'you'", {
+          sender: sender,
+          isFromYou: firstMessage.isFromYou,
+          messageIndex: firstMessage.index,
+          messagePreview: firstMessage.text?.substring(0, 50) || "no text"
+        });
+        // Still try to extract from it if it exists, but log a warning
+      }
+      
+      if (!firstMessage || !firstMessage.text) {
+        this.addConsoleLog("PLACEHOLDERS", "No text in first message (index 0)", {
+          messageIndex: firstMessage?.index,
+          hasMessage: !!firstMessage
+        });
+        return {
+          name: null,
+          school: null,
+          their_idea_pain_vision: null,
+        };
+      }
+      
+      const actualMessage = firstMessage.text.trim();
+      this.addConsoleLog("PLACEHOLDERS", "Extracting from message at index 0", {
+        messageIndex: firstMessage.index,
+        sender: sender,
+        messagePreview: actualMessage.substring(0, 200),
+        templatePreview: template.substring(0, 100) + "..."
+      });
+      
+      // Extract name by comparing template and actual message
+      // Template: "hey {name}," or "Hi {name},"
+      // Actual: "Hi Ashaaz," or "hey Rohan,"
+      // Match the greeting pattern and extract what comes after
+      const templateNamePattern = /\{name\}/i;
+      if (templateNamePattern.test(template)) {
+        // Find where {name} appears in template (after greeting)
+        const templateBeforeName = template.substring(0, template.indexOf("{name}"));
+        const templateAfterName = template.substring(template.indexOf("{name}") + "{name}".length);
+        
+        // Extract greeting pattern from template (e.g., "hey ", "Hi ")
+        const greetingMatch = templateBeforeName.match(/(?:hey|hi|hello)\s+/i);
+        if (greetingMatch) {
+          // Find the same greeting in actual message
+          const greeting = greetingMatch[0];
+          const greetingIndex = actualMessage.toLowerCase().indexOf(greeting.toLowerCase());
+          
+          if (greetingIndex !== -1) {
+            // Extract text after greeting, up to the next punctuation or template pattern
+            const nameStart = greetingIndex + greeting.length;
+            // Find where name ends - look for comma, period, or space before next word
+            const nameEndPatterns = [
+              /[,\.!?\n]/,  // Punctuation
+              /\s+my\s+/i,  // Space before "my"
+              /\s+I'?m\s+/i,  // Space before "I'm"
+              /\s+the\s+/i,  // Space before "the"
+            ];
+            
+            let nameEnd = actualMessage.length;
+            for (const pattern of nameEndPatterns) {
+              const match = actualMessage.substring(nameStart).match(pattern);
+              if (match && match.index !== undefined) {
+                nameEnd = Math.min(nameEnd, nameStart + match.index);
+              }
+            }
+            
+            if (nameEnd > nameStart) {
+              let name = actualMessage.substring(nameStart, nameEnd).trim();
+              // Remove trailing punctuation
+              name = name.replace(/[,\.!?;:]+$/, "").trim();
+              if (name.length > 0 && name.length <= 50) {
+                placeholders.name = name;
+                this.addConsoleLog("PLACEHOLDERS", "Extracted name from template comparison", {
+                  name: name,
+                  greeting: greeting,
+                  nameStart: nameStart,
+                  nameEnd: nameEnd
+                });
+              }
+            }
+          }
+        }
+        
+        // Fallback: if template comparison didn't work, try regex
+        if (!placeholders.name) {
+          const namePatterns = [
+            /^(?:hi|hey|hello)\s+([^,\.!?\n]+?)[,\.!?\n]/i,
+            /^(?:hi|hey|hello)\s+([A-Z][a-z]+)(?:\s|,|\.|$)/i,
+          ];
+          
+          for (const pattern of namePatterns) {
+            const match = actualMessage.match(pattern);
+            if (match && match[1]) {
+              let name = match[1].trim();
+              name = name.replace(/\s+(my|the|a|an|and|or)$/i, "").trim();
+              if (name.length > 0 && name.length <= 50) {
+                placeholders.name = name;
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      // Extract school by comparing template and actual message
+      // Template has: "students at {school}" OR might have "attended {school}"
+      // Actual message: "attended tino" or "students at valley christian"
+      const templateSchoolPattern = /\{school\}/i;
+      if (templateSchoolPattern.test(template)) {
+        // Template might have: "students at {school}" or variations
+        // Actual message might have: "attended tino" or "students at valley christian"
+        
+        // Try to find "attended {school}" pattern first (most common in actual messages)
+        const attendedPattern = /(?:friend|close friend|buddy|pal|colleague)\s+(?:who\s+)?(?:attended|went to)\s+([A-Za-z0-9\s]{1,40})(?:\s+(?:told|pointed|said|mentioned|shared|me|about)|[,\.!?]|$)/i;
+        const attendedMatch = actualMessage.match(attendedPattern);
+        
+        if (attendedMatch && attendedMatch[1]) {
+          let school = attendedMatch[1].trim();
+          school = school.replace(/[.,!?;:]+$/, "").trim();
+          school = school.replace(/\s+/g, " ").trim();
+          
+          // Filter out false positives
+          if (school.length >= 2 && 
+              school.length <= 50 &&
+              !school.match(/^(the|a|an|and|or|at|from|are|were|used|to|told|said|mentioned|students|friend|who|attended|went|my|close|cool|things|build|there|nonprofits|projects|research|internships|ideas|passion|even|me|about)$/i)) {
+            placeholders.school = school.toLowerCase();
+            this.addConsoleLog("PLACEHOLDERS", "Extracted school from 'attended' pattern", {
+              school: placeholders.school,
+              match: attendedMatch[0]
+            });
+          }
+        }
+        
+        // If not found, try "students at {school}" pattern (from template)
+        if (!placeholders.school) {
+          const studentsAtPattern = /students\s+(?:at|from)\s+([A-Za-z0-9\s&'\-\.]{1,50}?)(?:\s+(?:are|used to|were|used|build|working|used to build)|[,\.!?]|$)/i;
+          const studentsAtMatch = actualMessage.match(studentsAtPattern);
+          
+          if (studentsAtMatch && studentsAtMatch[1]) {
+            let school = studentsAtMatch[1].trim();
+            school = school.replace(/[.,!?;:]+$/, "").trim();
+            school = school.replace(/\s+/g, " ").trim();
+            
+            if (school.length >= 2 && 
+                school.length <= 50 &&
+                !school.match(/^(the|a|an|and|or|at|from|are|were|used|to|told|said|mentioned|students|friend|who|attended|went|my|close|cool|things|build|there|nonprofits|projects|research|internships|ideas|passion|even)$/i)) {
+              placeholders.school = school.toLowerCase();
+              this.addConsoleLog("PLACEHOLDERS", "Extracted school from 'students at' pattern", {
+                school: placeholders.school,
+                match: studentsAtMatch[0]
+              });
+            }
+          }
+        }
+        
+        // If still not found, try simpler "attended {school}" pattern
+        if (!placeholders.school) {
+          const simpleAttendedPattern = /(?:attended|went to)\s+([A-Za-z0-9\s]{1,40})(?:\s+(?:told|pointed|said|mentioned|shared|me|about)|[,\.!?]|$)/i;
+          const simpleMatch = actualMessage.match(simpleAttendedPattern);
+          
+          if (simpleMatch && simpleMatch[1]) {
+            let school = simpleMatch[1].trim();
+            school = school.replace(/[.,!?;:]+$/, "").trim();
+            school = school.replace(/\s+/g, " ").trim();
+            
+            if (school.length >= 2 && 
+                school.length <= 50 &&
+                !school.match(/^(the|a|an|and|or|at|from|are|were|used|to|told|said|mentioned|students|friend|who|attended|went|my|close|cool|things|build|there|nonprofits|projects|research|internships|ideas|passion|even|me|about)$/i)) {
+              placeholders.school = school.toLowerCase();
+              this.addConsoleLog("PLACEHOLDERS", "Extracted school from simple 'attended' pattern", {
+                school: placeholders.school,
+                match: simpleMatch[0]
+              });
+            }
+          }
+        }
+      }
+      
+      // DEBUG: Log extraction results
+      this.addConsoleLog("PLACEHOLDERS", "=== TEMPLATE COMPARISON EXTRACTION ===", {
+        messageIndex: firstMessage.index,
+        template: template.substring(0, 100) + "...",
+        actualMessage: actualMessage.substring(0, 200),
+        extractedName: placeholders.name || "(NOT FOUND)",
+        extractedSchool: placeholders.school || "(NOT FOUND)",
+      });
+      
+      // Extract their_idea_pain_vision from PROSPECT messages (what they're working on)
+      // Look for messages where the prospect talks about their project, idea, passion, or vision
+      const prospectMessages = (conversation.messages || [])
+        .filter(m => {
+          const sender = m.sender || "";
+          return sender === "prospect" || (sender !== "you" && m.isFromYou === false);
+        })
+        .map(m => m.text || "")
+        .filter(text => text.trim().length > 0);
+      
+      if (prospectMessages.length > 0) {
+        const prospectText = prospectMessages.join(" ").toLowerCase();
+        
+        // Try to extract key information about their project/idea/passion
+        const ideaPatterns = [
+          // "I'm working on X" or "working on X"
+          /(?:i'?m\s+)?(?:working on|building|creating|developing|starting|launching|doing)\s+(.+?)(?:\.|,|\?|$)/gi,
+          // "my project/idea/startup/nonprofit/initiative X"
+          /(?:my|our)\s+(?:project|idea|startup|nonprofit|initiative|organization|company|app|platform|program)\s+(?:is|called|about|for|to)?\s*(.+?)(?:\.|,|\?|$)/gi,
+          // "I'm passionate about X" or "interested in X"
+          /(?:i'?m\s+)?(?:passionate about|interested in|focused on|excited about)\s+(.+?)(?:\.|,|\?|$)/gi,
+          // Direct mentions: "X is my project" or "X is what I'm working on"
+          /(.+?)\s+(?:is|are)\s+(?:my|what i'?m)\s+(?:project|idea|startup|nonprofit|initiative|passion)/gi,
+        ];
+        
+        let extractedIdea = null;
+        for (const pattern of ideaPatterns) {
+          const matches = Array.from(prospectText.matchAll(pattern));
+          for (const match of matches) {
+            if (match[1]) {
+              let idea = match[1].trim();
+              // Clean up the idea text
+              idea = idea.replace(/^(that|this|it|a|an|the)\s+/i, "").trim();
+              // Remove trailing punctuation
+              idea = idea.replace(/[.,!?;:]+$/, "").trim();
+              // Limit length
+              if (idea.length > 10 && idea.length < 200) {
+                extractedIdea = idea.length > 100 ? idea.substring(0, 100) + "..." : idea;
+                this.addConsoleLog("PLACEHOLDERS", "Found idea/vision in prospect messages", {
+                  idea: extractedIdea,
+                  pattern: pattern.toString(),
+                  match: match[0],
+                  prospectMessageCount: prospectMessages.length
+                });
+                break;
+              }
+            }
+          }
+          if (extractedIdea) break;
+        }
+        
+        // If we didn't find a specific pattern, try to extract from longer prospect responses
+        // Look for sentences that mention projects, ideas, or work
+        if (!extractedIdea) {
+          for (const msg of prospectMessages) {
+            const msgLower = msg.toLowerCase();
+            // Check if message mentions project-related keywords
+            if (msgLower.match(/(?:project|idea|startup|nonprofit|initiative|working on|building|creating)/i)) {
+              // Extract first substantial sentence that mentions these keywords
+              const sentences = msg.split(/[.!?]+/).filter(s => s.trim().length > 20);
+              for (const sentence of sentences) {
+                const sentLower = sentence.toLowerCase();
+                if (sentLower.match(/(?:project|idea|startup|nonprofit|initiative|working on|building|creating)/i)) {
+                  let idea = sentence.trim();
+                  idea = idea.replace(/^(that|this|it|a|an|the)\s+/i, "").trim();
+                  if (idea.length > 20 && idea.length < 200) {
+                    extractedIdea = idea.length > 100 ? idea.substring(0, 100) + "..." : idea;
+                    this.addConsoleLog("PLACEHOLDERS", "Found idea/vision in prospect message sentence", {
+                      idea: extractedIdea,
+                      sentence: sentence.substring(0, 100)
+                    });
+                    break;
+                  }
+                }
+              }
+              if (extractedIdea) break;
+            }
+          }
+        }
+        
+        if (extractedIdea) {
+          placeholders.their_idea_pain_vision = extractedIdea;
+        }
+      }
+      
+      // Final log with all extracted placeholders
+      this.addConsoleLog("PLACEHOLDERS", "=== FINAL EXTRACTION RESULTS ===", {
+        name: placeholders.name || null,
+        school: placeholders.school || null,
+        their_idea_pain_vision: placeholders.their_idea_pain_vision || null,
+        allPlaceholders: placeholders
+      });
+      
+    } catch (error) {
+      this.addConsoleLog("PLACEHOLDERS", "Template extraction failed", {
+        error: error.message,
+        stack: error.stack
+      });
+      // Return empty structure with nulls - don't fall back to profile extraction
+      return {
+        name: null,
+        school: null,
+        their_idea_pain_vision: null,
+      };
+    }
+    
+    // Always return placeholders object (even if empty) - never return undefined
+    // This ensures we always have a consistent structure
+    return {
+      name: placeholders.name || null,
+      school: placeholders.school || null,
+      their_idea_pain_vision: placeholders.their_idea_pain_vision || null,
+    };
+  }
+
+  /**
+   * Fallback placeholder extraction using pattern matching
+   * Used when template comparison fails or as a secondary method
+   */
+  extractPlaceholdersFallback(prospectName, description, messages) {
+    const placeholders = {};
+    
+    // Find the first message sent by "you" (the initial outreach message)
+    const firstYourMessage = (messages || []).find(m => {
+      const sender = m.sender || "";
+      const isFromYou = m.isFromYou !== false && m.isFromYou !== undefined ? m.isFromYou : (sender === "you");
+      return isFromYou || sender === "you" || (sender !== "prospect" && !sender.includes("prospect"));
+    });
+
+    if (firstYourMessage && firstYourMessage.text) {
+      const messageText = firstYourMessage.text.trim();
+      
+      // Extract name: between "hey" and comma
+      const nameMatch = messageText.match(/^hey\s+([^,]+?),/i);
+      if (nameMatch && nameMatch[1]) {
+        placeholders.name = nameMatch[1].trim();
+      }
+      
+      // Extract school: between "students at" and "are working on" (or similar)
+      const studentsAtIndex = messageText.toLowerCase().indexOf("students at");
+      if (studentsAtIndex !== -1) {
+        const atIndex = messageText.toLowerCase().indexOf("at", studentsAtIndex);
+        if (atIndex !== -1) {
+          const schoolStart = atIndex + 3;
+          const endPatterns = [
+            /\s+are\s+working/i,
+            /\s+outside/i,
+            /[.,!?\n]/,
+          ];
+          
+          let schoolEnd = messageText.length;
+          for (const pattern of endPatterns) {
+            const match = messageText.substring(schoolStart).match(pattern);
+            if (match && match.index !== undefined) {
+              schoolEnd = Math.min(schoolEnd, schoolStart + match.index);
+            }
+          }
+          
+          if (schoolEnd > schoolStart) {
+            let school = messageText.substring(schoolStart, schoolEnd).trim();
+            school = school.replace(/[.,!?;:]+$/, "").trim();
+            
+            if (school.length >= 1 && school.length <= 50) {
+              placeholders.school = school;
+            }
+          }
+        }
+      }
+      
+      // Fallback: if we didn't find "students at", try just "at" before "are working" or "outside"
+      if (!placeholders.school) {
+        const atMatch = messageText.match(/\bat\s+([A-Za-z0-9\s&'\-\.]{1,50}?)(?:\s+are\s+working|\s+outside|\.|,|$)/i);
+        if (atMatch && atMatch[1]) {
+          let school = atMatch[1].trim();
+          school = school.replace(/[.,!?;:]+$/, "").trim();
+          if (school.length >= 1 && 
+              !school.match(/^(the|a|an|and|or|at|from|are|working)$/i) &&
+              school.length <= 50) {
+            placeholders.school = school;
+          }
+        }
+      }
+    }
+
+    // NOTE: We DO NOT extract from profile/description anymore
+    // Only extract from the actual initial message text
+    // This ensures we get the exact values used in the conversation (e.g., "Ari" not "Ari Zhang", "dvhs" not "Dougherty Valley High School")
+
+    // Extract their_idea/pain/vision from prospect messages
+    // Look for messages where prospect talks about their project, idea, pain, or vision
+    const prospectMessages = (messages || [])
+      .filter(m => m.sender === "prospect" || (m.sender !== "you" && m.isFromYou === false))
+      .map(m => m.text || "")
+      .join(" ");
+
+    if (prospectMessages) {
+      // Try to extract key information about their project/idea
+      const ideaPatterns = [
+        /(?:working on|building|creating|developing|starting|launching|doing)\s+(.+?)(?:\.|,|$)/gi,
+        /(?:project|idea|startup|nonprofit|initiative|organization)\s+(.+?)(?:\.|,|$)/gi,
+      ];
+
+      for (const pattern of ideaPatterns) {
+        const matches = prospectMessages.matchAll(pattern);
+        for (const match of matches) {
+          if (match[1] && match[1].length > 10 && match[1].length < 200) {
+            const idea = match[1].trim();
+            // Clean up and truncate if too long
+            placeholders.their_idea_pain_vision = idea.length > 100 
+              ? idea.substring(0, 100) + "..." 
+              : idea;
+            break;
+          }
+        }
+        if (placeholders.their_idea_pain_vision) break;
+      }
+    }
+
+    return placeholders;
   }
 
   async persistConversation(conversationData) {
@@ -1969,6 +2876,201 @@ class DOMExtractor {
     this.kbStatusEl.style.color = isError ? "#ffb4b4" : "#9aa7b2";
   }
 
+  toggleKnowledgeBase() {
+    const content = document.getElementById("kbContent");
+    const icon = document.getElementById("kbToggleIcon");
+    if (!content || !icon) return;
+    const open = content.classList.toggle("open");
+    if (open) {
+      icon.classList.add("open");
+      icon.textContent = "▶";
+    } else {
+      icon.classList.remove("open");
+      icon.textContent = "▶";
+    }
+    // Rotate icon visually when open
+    icon.style.transform = open ? "rotate(90deg)" : "rotate(0deg)";
+  }
+
+  toggleScripts() {
+    const content = document.getElementById("scriptsContent");
+    const icon = document.getElementById("scriptsToggleIcon");
+    if (!content || !icon) return;
+    const open = content.classList.toggle("open");
+    icon.style.transform = open ? "rotate(90deg)" : "rotate(0deg)";
+  }
+
+  togglePlaceholders() {
+    const content = document.getElementById("placeholdersContent");
+    const icon = document.getElementById("placeholdersToggleIcon");
+    if (!content || !icon) return;
+    const open = content.classList.toggle("open");
+    icon.style.transform = open ? "rotate(90deg)" : "rotate(0deg)";
+  }
+
+  async loadScripts() {
+    const container = document.getElementById("scriptsContainer");
+    if (!container) return;
+
+    try {
+      const healthy = await this.aiService.checkHealth();
+      if (!healthy) {
+        container.innerHTML = '<div class="status-details" style="color: #ffb4b4">AI service not available. Start python main.py</div>';
+        return;
+      }
+
+      const result = await this.aiService.getScriptsList();
+      const phases = result.phases || {};
+
+      if (Object.keys(phases).length === 0) {
+        container.innerHTML = '<div class="status-details" style="color: #9aa7b2">No scripts available</div>';
+        return;
+      }
+
+      let html = "";
+      for (const [phaseId, phaseData] of Object.entries(phases)) {
+        const phaseName = phaseData.name || phaseId;
+        const templates = phaseData.templates || [];
+
+        if (templates.length === 0) continue;
+
+        html += `<div style="margin-bottom: 16px;">`;
+        html += `<div class="status-details" style="font-weight: 600; color: #8ab4ff; margin-bottom: 8px;">${phaseName}</div>`;
+        html += `<div style="display: flex; flex-wrap: wrap; gap: 6px;">`;
+
+        for (const template of templates) {
+          html += `<button class="btn btn-ghost btn-small script-btn" 
+                           data-phase="${phaseId}" 
+                           data-template-id="${template.id}"
+                           style="font-size: 11px; padding: 4px 8px;">
+                    ${template.label}
+                  </button>`;
+        }
+
+        html += `</div></div>`;
+      }
+
+      container.innerHTML = html;
+
+      // Attach click handlers
+      container.querySelectorAll(".script-btn").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          const phase = e.target.getAttribute("data-phase");
+          const templateId = e.target.getAttribute("data-template-id");
+          await this.insertScript(phase, templateId);
+        });
+      });
+    } catch (error) {
+      console.error("Error loading scripts:", error);
+      container.innerHTML = `<div class="status-details" style="color: #ffb4b4">Error loading scripts: ${error.message}</div>`;
+    }
+  }
+
+  async insertScript(phase, templateId) {
+    try {
+      this.addConsoleLog("SCRIPTS", "Fetching script", { phase, templateId });
+
+      const result = await this.aiService.getScript(phase, templateId);
+      let scriptText = result.text || "";
+
+      if (!scriptText) {
+        this.addConsoleLog("SCRIPTS", "Script text is empty", { phase, templateId });
+        return;
+      }
+
+      // Get the active LinkedIn tab
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!tab || !tab.url || !tab.url.includes("linkedin.com/messaging")) {
+        this.addConsoleLog("SCRIPTS", "Not on LinkedIn messaging page", {});
+        alert("Please open a LinkedIn conversation thread first.");
+        return;
+      }
+
+      // Extract thread ID from URL
+      const threadIdMatch = tab.url.match(/\/messaging\/thread\/([^\/]+)/);
+      const threadId = threadIdMatch ? threadIdMatch[1] : null;
+
+      // Fetch conversation data to get placeholders
+      let placeholders = {};
+      
+      if (threadId) {
+        try {
+          const convo = await this.supabaseService.getConversation(threadId);
+          if (convo && convo.placeholders) {
+            placeholders = convo.placeholders;
+            this.addConsoleLog("SCRIPTS", "Loaded placeholders from conversation", {
+              placeholders,
+            });
+          }
+        } catch (err) {
+          console.warn("Could not load conversation for placeholders:", err);
+          // Continue without placeholders - user can fill manually
+        }
+      }
+
+      // Replace placeholders in script text
+      // Define all placeholder patterns and their values
+      // If placeholder is null/undefined, leave the placeholder text so user can fill manually
+      const replacements = [];
+      
+      // Name placeholder
+      if (placeholders.name) {
+        replacements.push({ pattern: /\{name\}/gi, value: placeholders.name });
+      }
+      // If name is null, leave {name} in the text for user to fill
+      
+      // School placeholder
+      if (placeholders.school) {
+        replacements.push({ pattern: /\{school\}/gi, value: placeholders.school });
+      }
+      // If school is null, leave {school} in the text for user to fill
+      
+      // Their idea/pain/vision placeholder
+      if (placeholders.their_idea_pain_vision) {
+        // Replace both {their_idea/pain/vision} and {their_idea_pain_vision} variants
+        replacements.push({ pattern: /\{their_idea\/pain\/vision\}/gi, value: placeholders.their_idea_pain_vision });
+        replacements.push({ pattern: /\{their_idea_pain_vision\}/gi, value: placeholders.their_idea_pain_vision });
+        // Also handle {initiative} as an alias
+        replacements.push({ pattern: /\{initiative\}/gi, value: placeholders.their_idea_pain_vision });
+      }
+      // If their_idea_pain_vision is null, leave placeholder in the text for user to fill
+
+      // Apply all replacements
+      let replacedCount = 0;
+      for (const { pattern, value } of replacements) {
+        if (scriptText.match(pattern)) {
+          scriptText = scriptText.replace(pattern, value);
+          replacedCount++;
+        }
+      }
+      
+      this.addConsoleLog("SCRIPTS", "Replaced placeholders", {
+        placeholdersFound: Object.keys(placeholders).length,
+        placeholdersReplaced: replacedCount,
+        finalLength: scriptText.length,
+      });
+
+      // Inject the script into the message input
+      await this.aiService.injectResponse(scriptText, tab.id);
+
+      this.addConsoleLog("SCRIPTS", "Script inserted", {
+        phase,
+        templateId,
+        length: scriptText.length,
+      });
+    } catch (error) {
+      console.error("Error inserting script:", error);
+      this.addConsoleLog("SCRIPTS", "Error inserting script", {
+        error: error.message,
+      });
+      alert(`Failed to insert script: ${error.message}`);
+    }
+  }
+
   async saveKnowledgeEntry() {
     const questionEl = document.getElementById("kbQuestionInput");
     const answerEl = document.getElementById("kbAnswerInput");
@@ -2007,6 +3109,7 @@ class DOMExtractor {
         source: source || null,
         tags,
       };
+      this.addConsoleLog("KB", "Submitting knowledge entry", payload);
 
       const result = await this.aiService.addKnowledgeEntry(payload);
       this.setKbStatus("Saved! The AI can now reuse this answer.", false);
@@ -2023,6 +3126,9 @@ class DOMExtractor {
       });
     } catch (error) {
       this.setKbStatus(error.message || "Failed to save knowledge entry.", true);
+      this.addConsoleLog("ERROR", "Knowledge entry save failed", {
+        message: error.message,
+      });
     } finally {
       if (saveBtn) {
         saveBtn.disabled = false;

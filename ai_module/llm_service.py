@@ -44,9 +44,9 @@ class ResponsesClient:
         
         # Add max tokens
         if max_output_tokens is not None:
-            chat_kwargs["max_completion_tokens"] = max_output_tokens
+            chat_kwargs["max_tokens"] = max_output_tokens
         elif Config.MAX_TOKENS:
-            chat_kwargs["max_completion_tokens"] = Config.MAX_TOKENS
+            chat_kwargs["max_tokens"] = Config.MAX_TOKENS
         
         resp = self.client.chat.completions.create(**chat_kwargs)
         text = resp.choices[0].message.content if resp.choices else "{}"

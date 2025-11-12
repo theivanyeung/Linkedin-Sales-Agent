@@ -173,6 +173,56 @@ class AIService {
   }
 
   /**
+   * Get the initial message template for placeholder extraction.
+   */
+  async getInitialMessageTemplate() {
+    try {
+      const response = await fetch(`${this.baseUrl}/scripts/initial-message`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch initial message template: ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error("Error fetching initial message template:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get all available scripts organized by phase.
+   */
+  async getScriptsList() {
+    try {
+      const response = await fetch(`${this.baseUrl}/scripts/list`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch scripts: ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error("Error fetching scripts list:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get a specific script template.
+   */
+  async getScript(phase, templateId) {
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/scripts/get?phase=${encodeURIComponent(phase)}&template_id=${encodeURIComponent(templateId)}`
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to fetch script: ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error("Error fetching script:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Full flow: get conversation → generate response → inject
    *
    * SECURITY: Always requires manual user review and send

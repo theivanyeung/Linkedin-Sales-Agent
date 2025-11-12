@@ -148,4 +148,3 @@ def list_recent(limit: int = 20) -> List[Dict[str, Any]]:
     )
     return response.data or []
 
-

@@ -13,6 +13,7 @@ from knowledge_base import (
     retrieve as kb_retrieve,
     list_recent as kb_list_recent,
 )
+from static_scripts import PHASE_LIBRARY, get_phase_config
 import traceback
 
 app = Flask(__name__)
@@ -235,6 +236,175 @@ def recent_kb():
         return jsonify({"items": documents, "count": len(documents)}), 200
     except Exception as e:
         print(f"Error listing KB documents: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/scripts/initial-message', methods=['GET'])
+def get_initial_message_template():
+    """Return the initial message template for placeholder extraction."""
+    try:
+        from static_scripts import get_initial_message_template
+        template = get_initial_message_template()
+        return jsonify({"template": template}), 200
+    except Exception as e:
+        print(f"Error getting initial message template: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/scripts/list', methods=['GET'])
+def list_scripts():
+    """Return all available scripts organized by phase for UI insertion."""
+    try:
+        scripts = {}
+        for phase_id, phase_data in PHASE_LIBRARY.items():
+            phase_name = phase_data.get("name", phase_id)
+            scripts[phase_id] = {
+                "name": phase_name,
+                "summary": phase_data.get("summary", ""),
+                "templates": [],
+            }
+            
+            # Building Rapport phase templates
+            if phase_id == "building_rapport":
+                # Note: Initial message is not exposed as it's already sent to all leads
+                
+                probes = phase_data.get("sections", {}).get("engaging_with_lead", {}).get("probes", {})
+                if "initial_probe" in probes:
+                    scripts[phase_id]["templates"].append({
+                        "id": "initial_probe",
+                        "label": "Ask About Motivation",
+                        "text": probes["initial_probe"],
+                    })
+                if "pain_roadblock_probe" in probes:
+                    scripts[phase_id]["templates"].append({
+                        "id": "pain_probe",
+                        "label": "Ask About Barriers",
+                        "text": probes["pain_roadblock_probe"],
+                    })
+                if "vision_aspiration_probe" in probes:
+                    scripts[phase_id]["templates"].append({
+                        "id": "vision_probe",
+                        "label": "Ask About Vision",
+                        "text": probes["vision_aspiration_probe"],
+                    })
+                
+                context = phase_data.get("sections", {}).get("relevance_context", {}).get("script", "")
+                if context:
+                    scripts[phase_id]["templates"].append({
+                        "id": "relevance_context",
+                        "label": "Relevance Context",
+                        "text": context,
+                    })
+            
+            # Selling phase templates
+            elif phase_id == "doing_the_ask":
+                intro_variants = phase_data.get("sections", {}).get("introduction", {}).get("variants", [])
+                # Label variants with descriptive names based on content
+                variant_labels = [
+                    "Friend Context",
+                    "Success Story",
+                    "Prodicity Intro",
+                    "Timeline & CTA",
+                ]
+                
+                for i, variant in enumerate(intro_variants):
+                    label = variant_labels[i] if i < len(variant_labels) else f"Intro Part {i+1}"
+                    scripts[phase_id]["templates"].append({
+                        "id": f"intro_variant_{i+1}",
+                        "label": label,
+                        "text": variant,
+                    })
+                
+                application = phase_data.get("sections", {}).get("application", {}).get("script", "")
+                if application:
+                    scripts[phase_id]["templates"].append({
+                        "id": "application",
+                        "label": "Application Link",
+                        "text": application,
+                    })
+                
+                call_scheduling = phase_data.get("sections", {}).get("call_scheduling", {}).get("script", "")
+                if call_scheduling:
+                    scripts[phase_id]["templates"].append({
+                        "id": "call_scheduling",
+                        "label": "Call Scheduling",
+                        "text": call_scheduling,
+                    })
+                
+                pricing = phase_data.get("sections", {}).get("pricing", {}).get("script", "")
+                if pricing:
+                    scripts[phase_id]["templates"].append({
+                        "id": "pricing",
+                        "label": "Pricing Info",
+                        "text": pricing,
+                    })
+                
+                social_proof = phase_data.get("sections", {}).get("social_proof", {}).get("script", "")
+                if social_proof:
+                    scripts[phase_id]["templates"].append({
+                        "id": "social_proof",
+                        "label": "Social Proof Examples",
+                        "text": social_proof,
+                    })
+        
+        return jsonify({"phases": scripts}), 200
+    except Exception as e:
+        print(f"Error listing scripts: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/scripts/get', methods=['GET'])
+def get_script():
+    """Get a specific script template by phase and template ID."""
+    try:
+        phase = request.args.get('phase')
+        template_id = request.args.get('template_id')
+        
+        if not phase or not template_id:
+            return jsonify({"error": "Both 'phase' and 'template_id' parameters are required"}), 400
+        
+        phase_config = get_phase_config(phase)
+        if not phase_config:
+            return jsonify({"error": f"Phase '{phase}' not found"}), 404
+        
+        # Extract the template based on ID
+        text = None
+        
+        if phase == "building_rapport":
+            if template_id == "initial_message":
+                text = phase_config.get("initial_message", "")
+            elif template_id == "initial_probe":
+                text = phase_config.get("sections", {}).get("engaging_with_lead", {}).get("probes", {}).get("initial_probe", "")
+            elif template_id == "pain_probe":
+                text = phase_config.get("sections", {}).get("engaging_with_lead", {}).get("probes", {}).get("pain_roadblock_probe", "")
+            elif template_id == "vision_probe":
+                text = phase_config.get("sections", {}).get("engaging_with_lead", {}).get("probes", {}).get("vision_aspiration_probe", "")
+            elif template_id == "relevance_context":
+                text = phase_config.get("sections", {}).get("relevance_context", {}).get("script", "")
+        elif phase == "doing_the_ask":
+            if template_id.startswith("intro_variant_"):
+                idx = int(template_id.split("_")[-1]) - 1
+                variants = phase_config.get("sections", {}).get("introduction", {}).get("variants", [])
+                if 0 <= idx < len(variants):
+                    text = variants[idx]
+            elif template_id == "application":
+                text = phase_config.get("sections", {}).get("application", {}).get("script", "")
+            elif template_id == "call_scheduling":
+                text = phase_config.get("sections", {}).get("call_scheduling", {}).get("script", "")
+            elif template_id == "pricing":
+                text = phase_config.get("sections", {}).get("pricing", {}).get("script", "")
+            elif template_id == "social_proof":
+                text = phase_config.get("sections", {}).get("social_proof", {}).get("script", "")
+        
+        if not text:
+            return jsonify({"error": f"Template '{template_id}' not found in phase '{phase}'"}), 404
+        
+        return jsonify({"text": text, "phase": phase, "template_id": template_id}), 200
+    except Exception as e:
+        print(f"Error getting script: {e}")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 

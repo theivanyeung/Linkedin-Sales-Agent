@@ -6,7 +6,6 @@ This is the real AI module that should be used by both simulator and production.
 from typing import Dict, Any
 from io_models import Conversation
 from orchestrator import run_pipeline
-from llm_service import ResponsesClient
 from static_scripts import (
     get_prompt_blocks, 
     cta_templates,
@@ -17,6 +16,7 @@ from static_scripts import (
     get_prodicity_examples,
 )
 from knowledge_base import retrieve as kb_retrieve
+from config import Config
 
 
 def generate_response(conv: Conversation) -> str:
@@ -30,6 +30,11 @@ def generate_response(conv: Conversation) -> str:
     phase = result["phase"]
     recommendation = result["recommendation"]
     knowledge_context = result["knowledge_context"]
+    if Config.DEBUG:
+        print(
+            f"[Generator] Phase={phase} Recommendation={recommendation} "
+            f"KB snippets={len(knowledge_context or [])}"
+        )
     
     # Build conversation context
     recent_messages = conv.messages[-10:] if len(conv.messages) > 10 else conv.messages
@@ -53,6 +58,12 @@ def generate_response(conv: Conversation) -> str:
     guidance = get_conversation_guidance(phase, conversation_state)
     prompt_blocks = get_prompt_blocks(phase)
     phase_context = get_phase_specific_context(phase)
+    if Config.DEBUG:
+        print(
+            "[Generator] Guidance next_step:",
+            guidance.get("next_step", ""),
+        )
+        print("[Generator] Prompt blocks included:", len(prompt_blocks))
     
     # Build system prompt with KB context and static scripts
     kb_context_text = ""
@@ -74,6 +85,8 @@ def generate_response(conv: Conversation) -> str:
         scripts_context += "The lead is ready. You can introduce Prodicity and share the application link if they show interest.\n"
         scripts_context += f"Application info: {get_application_info()}\n"
         scripts_context += f"Examples: {get_prodicity_examples()}\n"
+    if Config.DEBUG:
+        print("[Generator] System prompt prepared.")
     
     system_prompt = (
         "You are a sales agent for Prodicity, helping high school students ship real outcomes "
@@ -95,6 +108,8 @@ def generate_response(conv: Conversation) -> str:
         guidance_hint = "\n\nGuidance: If appropriate, introduce Prodicity in a way that's relevant to what they've shared. Reference specific things from the conversation."
         if result.get("ready_for_ask", False):
             guidance_hint += " The lead is ready - you can share the application link if they show interest."
+    if Config.DEBUG:
+        print("[Generator] User prompt guidance:", guidance_hint.strip())
     
     user_prompt = (
         f"Generate your next response to {prospect_name} based on this conversation:\n\n"
@@ -104,7 +119,6 @@ def generate_response(conv: Conversation) -> str:
     )
     
     # Generate response using traditional chat.completions
-    from config import Config
     from openai import OpenAI
     
     client = OpenAI(api_key=Config.OPENAI_API_KEY)
@@ -116,7 +130,7 @@ def generate_response(conv: Conversation) -> str:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "max_completion_tokens": 100,
+            "max_tokens": 100,
         }
         # Only include temperature if model supports it
         if Config.OPENAI_MODEL not in ["gpt-5"]:

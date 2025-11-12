@@ -167,13 +167,25 @@ class SupabaseService {
           links: Array.isArray(m.links) ? m.links : [],
         }));
 
+        // IMPORTANT: Always use placeholders from conversationData (extracted from message)
+        // DO NOT merge with existing placeholders - they might be from profile data
+        // This ensures we always use the exact values from the actual message
+        const placeholdersToSave = conversationData.placeholders || {};
+        
         const basePayload = {
-          url: conversationData.url || null,
-          title: conversationData.title || null,
-          description: conversationData.description || null,
+          // Preserve URL - use new if provided, otherwise keep existing, otherwise null
+          url: conversationData.url !== undefined ? conversationData.url : (existing.url || null),
+          // Preserve title - use new if provided and valid, otherwise keep existing
+          title: conversationData.title !== undefined && conversationData.title ? conversationData.title : (existing.title || null),
+          // Preserve description - use new if provided, otherwise keep existing
+          description: conversationData.description !== undefined ? conversationData.description : (existing.description || null),
           messages: merged,
           message_count: merged.length,
           updated_at: new Date().toISOString(),
+          // Preserve existing status if not explicitly provided
+          status: conversationData.status !== undefined ? conversationData.status : existing.status || 'unknown',
+          // Store placeholders from message ONLY - overwrite any existing (don't merge)
+          placeholders: placeholdersToSave,
         };
 
         const response = await fetch(
@@ -227,6 +239,9 @@ class SupabaseService {
           messages: withIndex,
           message_count: withIndex.length,
           updated_at: new Date().toISOString(),
+          status: conversationData.status || 'unknown',
+          // Store placeholders as JSONB map - use only from conversationData (extracted from message)
+          placeholders: conversationData.placeholders || {},
         };
 
         const response = await fetch(`${this.baseUrl}/conversations`, {
@@ -354,6 +369,7 @@ class SupabaseService {
         messages: conversationData.messages || [],
         message_count: (conversationData.messages || []).length,
         updated_at: new Date().toISOString(),
+        status: conversationData.status !== undefined ? conversationData.status : null,
       };
 
       const response = await fetch(
@@ -384,6 +400,55 @@ class SupabaseService {
       console.error("Error updating Supabase:", error);
       if (window.uiConsoleLog)
         window.uiConsoleLog("DB", "updateConversation exception", {
+          error: String(error),
+        });
+      throw error;
+    }
+  }
+
+  async updateLeadStatus(threadId, status) {
+    /** Update the lead status for a conversation. */
+    try {
+      if (window.uiConsoleLog)
+        window.uiConsoleLog("DB", "updateLeadStatus", { threadId, status });
+      console.log("DB UPDATE: updateLeadStatus threadId=", threadId, "status=", status);
+
+      const validStatuses = ['unknown', 'uninterested', 'interested', 'enrolled', 'ambassador'];
+      if (!validStatuses.includes(status)) {
+        throw new Error(`Invalid status: ${status}. Must be one of: ${validStatuses.join(', ')}`);
+      }
+
+      const payload = {
+        status: status,
+        updated_at: new Date().toISOString(),
+      };
+
+      const response = await fetch(
+        `${this.baseUrl}/conversations?thread_id=eq.${encodeURIComponent(threadId)}`,
+        {
+          method: "PATCH",
+          headers: {
+            apikey: this.config.anonKey,
+            Authorization: `Bearer ${this.config.anonKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Supabase error: ${response.status} - ${errorText}`);
+      }
+
+      console.log("Lead status updated in Supabase:", threadId, status);
+      if (window.uiConsoleLog)
+        window.uiConsoleLog("DB", "updateLeadStatus ok", { threadId, status });
+      return threadId;
+    } catch (error) {
+      console.error("Error updating lead status:", error);
+      if (window.uiConsoleLog)
+        window.uiConsoleLog("DB", "updateLeadStatus exception", {
           error: String(error),
         });
       throw error;

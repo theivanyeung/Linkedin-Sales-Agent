@@ -11,7 +11,11 @@
     "notifications",
     "storage"
   ],
-  "host_permissions": ["https://www.linkedin.com/*"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
   "action": {
     "default_title": "LinkedIn Sales Agent"
   },

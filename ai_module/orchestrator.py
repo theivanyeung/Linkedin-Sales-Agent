@@ -9,11 +9,14 @@ from analyzer import analyze_conversation
 from policies.readiness import evaluate_readiness
 from knowledge_base import retrieve as kb_retrieve
 from static_scripts import get_prompt_blocks, cta_templates, get_conversation_guidance
+from config import Config
 
 
 def run_pipeline(conv: Conversation) -> Dict[str, Any]:
     # Retrieve KB snippets (currently stub returns [])
     kb_snippets = kb_retrieve(query=f"{conv.title} {conv.description or ''}", k=5)
+    if Config.DEBUG:
+        print(f"[Orchestrator] KB snippets retrieved: {len(kb_snippets)}")
 
     # Analyze with single-pass LLM
     analysis = analyze_conversation(conv)
@@ -24,6 +27,12 @@ def run_pipeline(conv: Conversation) -> Dict[str, Any]:
     has_negative_signal = bool(analysis.get("has_negative_signal", False))
     phase = analysis.get("phase", "building_rapport")
     recommendation = analysis.get("recommendation", "Continue building rapport")
+    if Config.DEBUG:
+        print(
+            "[Orchestrator] Analyzer metrics -> "
+            f"phase={phase}, sentiment={sentiment}, engagement={engagement}, "
+            f"has_questions={has_questions}, negative_signal={has_negative_signal}"
+        )
 
     readiness = evaluate_readiness(
         sentiment=sentiment,
@@ -37,7 +46,7 @@ def run_pipeline(conv: Conversation) -> Dict[str, Any]:
     # Phase transition logic: if analyzer says "doing_the_ask" but not ready, stay in rapport
     if phase == "doing_the_ask" and not ready_for_ask:
         phase = "building_rapport"
-    
+
     # Also check if we should transition TO "doing_the_ask" if ready but still in rapport
     # This helps guide the conversation progression
     if phase == "building_rapport" and ready_for_ask:
@@ -66,6 +75,10 @@ def run_pipeline(conv: Conversation) -> Dict[str, Any]:
         next_message = {"text": "", "cta": ctas[0] if isinstance(ctas, list) and ctas else None, "variables": {}}
     else:
         next_message = {"text": "", "cta": None, "variables": {}}
+    if Config.DEBUG:
+        print("[Orchestrator] Guidance:", guidance.get("next_step"))
+        print("[Orchestrator] Prompt blocks:", len(blocks))
+        print("[Orchestrator] Ready for ask:", ready_for_ask)
 
     return {
         "phase": phase,

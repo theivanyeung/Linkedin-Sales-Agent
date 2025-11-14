@@ -38,9 +38,28 @@ class SupabaseService {
 
   async saveConversation(conversationData) {
     try {
+      // Validate Supabase configuration
+      if (!this.config || !this.config.url || !this.config.anonKey) {
+        const errorMsg = "Supabase configuration missing. Please check your supabase-config.js file.";
+        console.error("Supabase config error:", {
+          hasConfig: !!this.config,
+          hasUrl: !!(this.config?.url),
+          hasAnonKey: !!(this.config?.anonKey)
+        });
+        if (window.uiConsoleLog) {
+          window.uiConsoleLog("DB", "Config error", {
+            error: errorMsg,
+            hasConfig: !!this.config
+          });
+        }
+        throw new Error(errorMsg);
+      }
+
       if (window.uiConsoleLog)
         window.uiConsoleLog("DB", "saveConversation", {
           threadId: conversationData.threadId,
+          baseUrl: this.baseUrl,
+          hasConfig: !!this.config
         });
       console.log(
         "DB WRITE: saveConversation threadId=",
@@ -50,6 +69,7 @@ class SupabaseService {
         "Attempting to save conversation:",
         conversationData.threadId
       );
+      console.log("Supabase baseUrl:", this.baseUrl);
 
       // Build payload for insert/update, EXACT schema per requirement
       const normalizeMessage = (m) => ({
@@ -188,6 +208,29 @@ class SupabaseService {
           placeholders: placeholdersToSave,
         };
 
+        // Log what's being saved (UPDATE)
+        if (window.uiConsoleLog) {
+          window.uiConsoleLog("DB", "Saving to Supabase (UPDATE)", {
+            threadId: conversationData.threadId,
+            title: basePayload.title,
+            description: basePayload.description ? basePayload.description.substring(0, 100) + "..." : "none",
+            messageCount: basePayload.message_count,
+            url: basePayload.url,
+            status: basePayload.status,
+            placeholders: basePayload.placeholders,
+            messagesSample: merged.slice(0, 3).map(m => ({
+              index: m.index,
+              sender: m.sender,
+              textPreview: m.text?.substring(0, 50) + "...",
+              attachmentsCount: m.attachments?.length || 0,
+              reactionsCount: m.reactions?.length || 0,
+              linksCount: m.links?.length || 0,
+              mentionsCount: m.mentions?.length || 0
+            })),
+            totalMessages: merged.length
+          });
+        }
+
         const response = await fetch(
           `${this.baseUrl}/conversations?thread_id=eq.${encodeURIComponent(
             conversationData.threadId
@@ -205,13 +248,20 @@ class SupabaseService {
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error("Supabase error response (update):", errorText);
+          console.error("Supabase error response (update):", {
+            status: response.status,
+            statusText: response.statusText,
+            error: errorText,
+            url: `${this.baseUrl}/conversations?thread_id=eq.${encodeURIComponent(conversationData.threadId)}`
+          });
           if (window.uiConsoleLog)
             window.uiConsoleLog("DB", "update error", {
               status: response.status,
+              statusText: response.statusText,
               error: errorText,
+              threadId: conversationData.threadId
             });
-          throw new Error(`Supabase error: ${response.status} - ${errorText}`);
+          throw new Error(`Supabase update failed (${response.status}): ${errorText}`);
         }
 
         if (window.uiConsoleLog)
@@ -244,6 +294,29 @@ class SupabaseService {
           placeholders: conversationData.placeholders || {},
         };
 
+        // Log what's being saved (INSERT)
+        if (window.uiConsoleLog) {
+          window.uiConsoleLog("DB", "Saving to Supabase (INSERT)", {
+            threadId: insertPayload.thread_id,
+            title: insertPayload.title,
+            description: insertPayload.description ? insertPayload.description.substring(0, 100) + "..." : "none",
+            messageCount: insertPayload.message_count,
+            url: insertPayload.url,
+            status: insertPayload.status,
+            placeholders: insertPayload.placeholders,
+            messagesSample: withIndex.slice(0, 3).map(m => ({
+              index: m.index,
+              sender: m.sender,
+              textPreview: m.text?.substring(0, 50) + "...",
+              attachmentsCount: m.attachments?.length || 0,
+              reactionsCount: m.reactions?.length || 0,
+              linksCount: m.links?.length || 0,
+              mentionsCount: m.mentions?.length || 0
+            })),
+            totalMessages: withIndex.length
+          });
+        }
+
         const response = await fetch(`${this.baseUrl}/conversations`, {
           method: "POST",
           headers: {
@@ -257,13 +330,20 @@ class SupabaseService {
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error("Supabase error response (insert):", errorText);
+          console.error("Supabase error response (insert):", {
+            status: response.status,
+            statusText: response.statusText,
+            error: errorText,
+            url: `${this.baseUrl}/conversations`
+          });
           if (window.uiConsoleLog)
             window.uiConsoleLog("DB", "insert error", {
               status: response.status,
+              statusText: response.statusText,
               error: errorText,
+              threadId: conversationData.threadId
             });
-          throw new Error(`Supabase error: ${response.status} - ${errorText}`);
+          throw new Error(`Supabase insert failed (${response.status}): ${errorText}`);
         }
 
         if (window.uiConsoleLog)

@@ -24,6 +24,14 @@
   },
   "side_panel": {
     "default_path": "popup.html"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/messaging/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ]
 }
 

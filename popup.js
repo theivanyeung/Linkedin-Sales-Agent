@@ -71,9 +71,10 @@ class DOMExtractor {
 
     this.kbStatusEl = document.getElementById("kbStatusMessage");
     
-    const updateStatusBtn = document.getElementById("updateStatusBtn");
-    if (updateStatusBtn) {
-      updateStatusBtn.addEventListener("click", () => this.updateLeadStatus());
+    // Auto-save status when dropdown changes (no button needed)
+    const statusSelect = document.getElementById("leadStatusSelect");
+    if (statusSelect) {
+      statusSelect.addEventListener("change", () => this.updateLeadStatus());
     }
     
     const updatePlaceholdersBtn = document.getElementById("updatePlaceholdersBtn");
@@ -83,6 +84,18 @@ class DOMExtractor {
     
     // Load scripts on init
     this.loadScripts();
+    
+    // Ensure Script Templates panel is closed by default
+    this.ensureScriptsPanelClosed();
+  }
+  
+  ensureScriptsPanelClosed() {
+    const content = document.getElementById("scriptsContent");
+    const icon = document.getElementById("scriptsToggleIcon");
+    if (content && icon) {
+      content.classList.remove("open");
+      icon.style.transform = "rotate(0deg)";
+    }
   }
 
   async checkPageStatus() {
@@ -180,10 +193,10 @@ class DOMExtractor {
       // Update phase display
       this.updatePhaseDisplay(aiResult.phase);
 
-      // Inject
-      this.addConsoleLog("UI", "Injecting response into LinkedIn", { threadId });
+      // Copy to clipboard
+      this.addConsoleLog("UI", "Copying response to clipboard", { threadId });
       await this.aiService.injectResponse(aiResult.response, tab.id);
-      this.addConsoleLog("AI", "Generated from cloud", {
+      this.addConsoleLog("AI", "Generated from cloud - copied to clipboard", {
         threadId,
         phase: aiResult.phase,
       });
@@ -284,26 +297,22 @@ class DOMExtractor {
 
   async updateLeadStatus() {
     const statusSelect = document.getElementById("leadStatusSelect");
-    const updateBtn = document.getElementById("updateStatusBtn");
-    
-    if (!statusSelect || !updateBtn) return;
-    
+
+    if (!statusSelect) return;
+
     const status = statusSelect.value;
     const threadId = await this.getActiveThreadId();
     
     if (!threadId) {
-      alert("Please open a LinkedIn conversation thread first.");
+      // Silently fail if not on a conversation page
       return;
     }
     
     try {
-      updateBtn.disabled = true;
-      updateBtn.textContent = "Updating...";
-      
+      // Auto-save status (no button feedback needed)
       await this.supabaseService.updateLeadStatus(threadId, status);
       
-      this.addConsoleLog("CRM", "Status updated", { threadId, status });
-      updateBtn.textContent = "✅ Updated";
+      this.addConsoleLog("CRM", "Status auto-updated", { threadId, status });
       
       // Update lead card to reflect new status color immediately
       const leadCard = document.getElementById("leadCard");
@@ -313,17 +322,10 @@ class DOMExtractor {
         // Add the new status class
         leadCard.classList.add(`status-${status}`);
       }
-      
-      setTimeout(() => {
-        updateBtn.textContent = "Update";
-        updateBtn.disabled = false;
-      }, 2000);
     } catch (error) {
+      // Silently fail - don't interrupt user workflow
       console.error("Error updating lead status:", error);
       this.addConsoleLog("CRM", "Status update failed", { error: error.message });
-      alert(`Failed to update status: ${error.message}`);
-      updateBtn.textContent = "Update";
-      updateBtn.disabled = false;
     }
   }
 
@@ -440,34 +442,91 @@ class DOMExtractor {
         currentWindow: true,
       });
 
-      // Inject content script to get DOM
-      console.log("Injecting script into tab:", tab.id, tab.url);
-
-      // Simple test injection first
-      console.log("Testing basic injection...");
-
-      const testResults = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => {
-          console.log("Script injected successfully!");
-          return "test-success";
-        },
-      });
-
-      console.log("Test injection results:", testResults);
-
-      if (
-        !testResults ||
-        !testResults[0] ||
-        testResults[0].result !== "test-success"
-      ) {
-        throw new Error(
-          "Basic script injection failed - LinkedIn may be blocking scripts"
-        );
+      if (!tab || !tab.url || !tab.url.includes("linkedin.com/messaging")) {
+        throw new Error("Not on a LinkedIn messaging page");
       }
 
-      // Now try DOM extraction
-      console.log("Basic injection works, trying DOM extraction...");
+      // Use message passing to content script instead of script injection
+      const domData = await chrome.tabs.sendMessage(tab.id, {
+        action: 'extractConversation',
+        force: true
+      });
+
+      if (!domData) {
+        throw new Error("No response from content script");
+      }
+
+      // Check if the content script returned an error
+      if (domData.error) {
+        throw new Error(`DOM extraction failed: ${domData.error}`);
+      }
+
+      // Generate minimal JSON for download
+      const minimal = JSON.stringify(
+        {
+          threadId: domData.threadId,
+          title: domData.title,
+          description: domData.description,
+          messages: domData.messages,
+        },
+        null,
+        2
+      );
+
+      // Download messages JSON to dom snapshots/
+      await this.downloadJSON(minimal, domData.threadId, "messages");
+
+      // Update lead card in UI using title (name) and description
+      const dataHtml = `
+        <div>Messages: ${domData.messages.length}</div>
+        <div>Last updated: ${new Date(
+          domData.timestamp || Date.now()
+        ).toLocaleString()}</div>
+      `;
+      this.updateLeadCard({
+        name: domData.title || "—",
+        description: domData.description || "",
+        dataHtml,
+      });
+
+      this.setStatus("Success", "DOM extracted and downloaded");
+      extractBtn.textContent = "✅ Extracted!";
+
+      setTimeout(() => {
+        extractBtn.textContent = originalText;
+        extractBtn.disabled = false;
+        this.setStatus("Ready", "LinkedIn page detected");
+      }, 2000);
+    } catch (error) {
+      console.error("Error extracting DOM:", error);
+      this.setStatus("Error", error.message);
+      extractBtn.textContent = "❌ Error";
+
+      setTimeout(() => {
+        extractBtn.textContent = originalText;
+        extractBtn.disabled = false;
+        this.setStatus("Ready", "LinkedIn page detected");
+      }, 2000);
+    }
+  }
+
+  // Legacy method - kept for reference but replaced with message passing
+  async extractDOM_OLD() {
+    const extractBtn = document.getElementById("extractBtn");
+    const originalText = extractBtn.textContent;
+
+    extractBtn.disabled = true;
+    extractBtn.textContent = "Extracting...";
+    this.setStatus("Extracting", "Getting page DOM...");
+
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      // OLD METHOD - Using executeScript (detectable)
+      console.log("Injecting script into tab:", tab.id, tab.url);
 
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
@@ -981,8 +1040,8 @@ class DOMExtractor {
       const result = await this.aiService.generateAndInject(
         this.supabaseService
       );
-      this.setStatus("Ready", "Response injected. Review and send manually.");
-      if (btn) btn.textContent = "✅ Inserted";
+      this.setStatus("Ready", "Response copied to clipboard. Paste and send manually.");
+      if (btn) btn.textContent = "✅ Copied";
       setTimeout(() => {
         if (btn) {
           btn.disabled = false;
@@ -1000,6 +1059,62 @@ class DOMExtractor {
           btn.textContent = original || "Generate Response";
         }
       }, 2000);
+    }
+  }
+
+  /**
+   * Auto-generate AI response after conversation is saved
+   * This runs in the background and doesn't block the UI
+   */
+  async autoGenerateResponse(threadId) {
+    try {
+      this.addConsoleLog("AI", "Auto-generating response after save", { threadId });
+      this.setStatus("Thinking", "Auto-generating response...");
+      
+      // Get the conversation from Supabase (just saved)
+      const conversationData = await this.supabaseService.getConversation(threadId);
+      if (!conversationData || !conversationData.messages || conversationData.messages.length === 0) {
+        this.addConsoleLog("AI", "Skipping auto-gen - no messages", { threadId });
+        return;
+      }
+      
+      // Generate response using AI service
+      const aiResult = await this.aiService.generateResponse(
+        conversationData,
+        conversationData.prospectName || conversationData.title || ""
+      );
+      
+      this.addConsoleLog("AI", "Received /generate result (auto)", {
+        phase: aiResult.phase,
+        readyForAsk: aiResult.ready_for_ask,
+        knowledgeSnippets: aiResult.input?.knowledge_context?.length || 0,
+      });
+      
+      // Show suggested response in the top bar (same as manual generation)
+      this.setStatus("Suggested", aiResult.response);
+      this.addToHistory(threadId, aiResult.response);
+      
+      // Update phase display
+      this.updatePhaseDisplay(aiResult.phase);
+      
+      // Copy to clipboard
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.url && tab.url.includes("linkedin.com/messaging")) {
+        await this.aiService.injectResponse(aiResult.response, tab.id);
+        this.addConsoleLog("AI", "Auto-generated response copied to clipboard", {
+          threadId,
+          phase: aiResult.phase,
+        });
+      }
+      
+      return aiResult;
+    } catch (error) {
+      // Silently fail - auto-gen is optional
+      this.addConsoleLog("AI", "Auto-generation error (non-blocking)", {
+        threadId,
+        error: error.message,
+      });
+      throw error; // Re-throw so caller can handle if needed
     }
   }
 
@@ -1027,67 +1142,104 @@ class DOMExtractor {
       try {
         const existing = await this.supabaseService.getConversation(threadId);
         if (existing) {
-          // EXISTING CONVERSATION: Update placeholders only
-          // ALWAYS re-extract placeholders from the actual initial message (not from profile)
-          // This ensures we use exact values from the message (e.g., "Ari" not "Ari Zhang", "dvhs" not "Dougherty Valley High School")
+          // EXISTING CONVERSATION: Re-extract from DOM to get latest messages
+          this.addConsoleLog("DB", "Existing conversation detected - re-extracting from DOM to update messages", { 
+            threadId,
+            existingMessageCount: existing.messages?.length || 0
+          });
+          
           try {
-            this.addConsoleLog("PLACEHOLDERS", "Re-extracting placeholders from actual initial message (overwriting any profile data)", { 
-              threadId,
-              messageCount: existing.messages?.length || 0
-            });
-            const extractedPlaceholders = await this.extractPlaceholdersFromTemplate(existing);
-            
-            // ALWAYS overwrite placeholders with extracted ones (even if empty) to clear any profile data
-            // This ensures we never keep old profile-based placeholders
-            // NOTE: We keep existing title, description, url, status - only update placeholders
-            await this.supabaseService.saveConversation({
-              threadId: existing.thread_id || threadId,
-              title: existing.title, // Keep existing title (don't overwrite)
-              description: existing.description, // Keep existing description (don't overwrite)
-              url: existing.url || null, // Keep existing URL (don't overwrite)
-              messages: existing.messages || [],
-              status: existing.status || "unknown",
-              placeholders: extractedPlaceholders || {}, // Always overwrite placeholders - empty object clears profile data
-            });
-            
-            // Update local existing object
-            existing.placeholders = extractedPlaceholders || {};
-            
-            if (extractedPlaceholders && Object.keys(extractedPlaceholders).length > 0) {
-              this.addConsoleLog("PLACEHOLDERS", "Saved placeholders from message only (overwrote any profile data)", {
-                placeholders: extractedPlaceholders,
-                source: "initial_message_only"
+            // Extract conversation from DOM (gets latest messages)
+            const convo = await this.extractConversationFromActiveTab(tab.id);
+            if (convo && !convo.error && convo.messages && convo.messages.length > 0) {
+              // Extract placeholders from the initial message (not from profile)
+              const extractedPlaceholders = await this.extractPlaceholdersFromTemplate(convo);
+              
+              // Preserve existing title/description/url/status if they're good, but update messages and placeholders
+              const existingTitleIsClean = existing.title && 
+                !existing.title.includes("Mobile") && 
+                !existing.title.includes("•") &&
+                !existing.title.match(/\d+[wdhms]\s+ago/i);
+              
+              const finalTitle = (existingTitleIsClean && existing.title !== "Unknown") ? existing.title : convo.title;
+              const finalDescription = existing.description && existing.description.length > 0 ? existing.description : convo.description;
+              const finalUrl = existing.url || convo.url;
+              
+              // Update conversation with latest data (including new messages)
+              await this.supabaseService.saveConversation({
+                threadId: existing.thread_id || threadId,
+                title: finalTitle,
+                description: finalDescription,
+                url: finalUrl,
+                messages: convo.messages, // Always update with latest messages from DOM
+                status: existing.status || "unknown",
+                placeholders: extractedPlaceholders || {},
+              });
+              
+              // Update UI with saved data
+              const dataHtml = `
+                <div>Messages: ${convo.messages.length}</div>
+                <div>Updated: ${new Date().toLocaleString()}</div>
+              `;
+              this.updateLeadCard({
+                name: finalTitle || (extractedPlaceholders?.name) || "—",
+                description: finalDescription || "",
+                dataHtml,
+                status: existing.status || "unknown",
+                placeholders: extractedPlaceholders || {},
+              });
+              
+              this.addConsoleLog("DB", "Updated existing conversation in Supabase with latest messages", {
+                threadId,
+                messageCount: convo.messages.length,
+                previousMessageCount: existing.messages?.length || 0,
+                title: finalTitle,
+              });
+              this.setStatus("Ready", `Updated conversation ${threadId}`);
+              
+              // Auto-generate AI response after successful update
+              this.autoGenerateResponse(threadId).catch(err => {
+                // Don't show error to user - auto-gen is optional
+                this.addConsoleLog("AI", "Auto-generation failed (non-blocking)", { error: err.message });
               });
             } else {
-              this.addConsoleLog("PLACEHOLDERS", "No placeholders found in message - cleared any existing profile data", {
-                firstMessage: existing.messages?.find(m => m.sender === "you")?.text?.substring(0, 200) || "no 'you' messages found",
-                clearedPlaceholders: true
+              // Extraction failed, just load existing data
+              const dataHtml = `
+                <div>Messages: ${existing.messages?.length || 0}</div>
+                <div>Last updated: ${existing.updated_at ? new Date(existing.updated_at).toLocaleString() : '—'}</div>
+              `;
+              this.updateLeadCard({
+                name: existing.title || (existing.placeholders?.name) || "—",
+                description: existing.description || "",
+                dataHtml,
+                status: existing.status || "unknown",
+                placeholders: existing.placeholders || {},
               });
+              this.addConsoleLog("DB", "Loaded conversation from Supabase (extraction failed)", { 
+                threadId,
+                error: convo?.error || "Unknown error"
+              });
+              this.setStatus("Ready", `Loaded conversation ${threadId}`);
             }
           } catch (e) {
-            this.addConsoleLog("PLACEHOLDERS", "Failed to extract placeholders from message", {
+            // If extraction fails, just load existing data
+            const dataHtml = `
+              <div>Messages: ${existing.messages?.length || 0}</div>
+              <div>Last updated: ${existing.updated_at ? new Date(existing.updated_at).toLocaleString() : '—'}</div>
+            `;
+            this.updateLeadCard({
+              name: existing.title || (existing.placeholders?.name) || "—",
+              description: existing.description || "",
+              dataHtml,
+              status: existing.status || "unknown",
+              placeholders: existing.placeholders || {},
+            });
+            this.addConsoleLog("DB", "Failed to update conversation", {
+              threadId,
               error: e.message
             });
+            this.setStatus("Ready", `Loaded conversation ${threadId}`);
           }
-          
-          // Update UI with existing data from Supabase
-          const dataHtml = `
-            <div>Messages: ${existing.messages?.length || 0}</div>
-            <div>Last updated: ${existing.updated_at ? new Date(existing.updated_at).toLocaleString() : '—'}</div>
-          `;
-          this.updateLeadCard({
-            name: existing.title || (existing.placeholders?.name) || "—",
-            description: existing.description || "",
-            dataHtml,
-            status: existing.status || "unknown",
-            placeholders: existing.placeholders || {},
-          });
-          this.addConsoleLog("DB", "Loaded conversation from Supabase", { 
-            threadId,
-            messageCount: existing.messages?.length || 0,
-            hasPlaceholders: !!(existing.placeholders && Object.keys(existing.placeholders).length > 0)
-          });
-          this.setStatus("Ready", `Loaded conversation ${threadId}`);
         } else {
           // NEW CONVERSATION: Extract from DOM and save to Supabase automatically
           this.addConsoleLog("DB", "New conversation detected - extracting from DOM and saving", { threadId });
@@ -1124,6 +1276,12 @@ class DOMExtractor {
                 placeholders: convo.placeholders,
               });
               this.setStatus("Ready", `Saved new conversation ${threadId}`);
+              
+              // Auto-generate AI response after successful save
+              this.autoGenerateResponse(threadId).catch(err => {
+                // Don't show error to user - auto-gen is optional
+                this.addConsoleLog("AI", "Auto-generation failed (non-blocking)", { error: err.message });
+              });
             } else {
               // Extraction failed or no messages
               this.updateLeadCard({
@@ -1232,8 +1390,21 @@ class DOMExtractor {
           title: convo.title,
           description: convo.description,
           url: convo.url,
+          messageCount: convo.messages?.length || 0,
         });
-        await this.persistConversation(convo);
+        
+        try {
+          await this.persistConversation(convo);
+          this.addConsoleLog("DB", "Manual update successful", {
+            threadId: convo.threadId,
+          });
+        } catch (saveError) {
+          this.addConsoleLog("DB", "Manual update - save failed", {
+            threadId: convo.threadId,
+            error: saveError.message || String(saveError),
+          });
+          throw saveError; // Re-throw to be caught by outer catch
+        }
         
         // Update UI with saved data
         const dataHtml = `
@@ -1304,13 +1475,13 @@ class DOMExtractor {
     );
     this.addConsoleLog("AI", "Generated", { phase: aiResult.phase });
 
-    // Inject into currently active LinkedIn tab
+    // Copy to clipboard (user will paste manually)
     const [tab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
     });
     if (!tab || !tab.url || !tab.url.includes("linkedin.com/messaging")) {
-      this.addConsoleLog("AI", "Injection skipped (not on messaging)", {});
+      this.addConsoleLog("AI", "Copy skipped (not on messaging page)", {});
       return;
     }
       // Show suggested response in the top bar and add to history
@@ -1320,6 +1491,7 @@ class DOMExtractor {
       // Update phase display
       this.updatePhaseDisplay(aiResult.phase);
       
+      // Copy to clipboard instead of injecting
       await this.aiService.injectResponse(aiResult.response, tab.id);
   }
 
@@ -1395,6 +1567,73 @@ class DOMExtractor {
 
 
   async extractConversationFromActiveTab(tabId) {
+    // Use message passing to content script instead of script injection
+    try {
+      // Check if content script is loaded by trying to send a message
+      // If it fails, inject the content script first
+      let domData;
+      try {
+        domData = await chrome.tabs.sendMessage(tabId, {
+          action: 'extractConversation',
+          force: false
+        });
+      } catch (messageError) {
+        // Content script might not be loaded - try to inject it
+        const errorStr = String(messageError.message || messageError);
+        if (errorStr.includes("Receiving end does not exist") || errorStr.includes("Could not establish connection")) {
+          this.addConsoleLog("EXTRACTION", "Content script not loaded, injecting...", {
+            tabId: tabId
+          });
+          
+          try {
+            // Inject content script manually
+            await chrome.scripting.executeScript({
+              target: { tabId: tabId },
+              files: ['content-script.js']
+            });
+            
+            // Wait for script to initialize and DOM to be ready
+            // Give LinkedIn time to render the conversation UI
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Try again
+            domData = await chrome.tabs.sendMessage(tabId, {
+              action: 'extractConversation',
+              force: false
+            });
+          } catch (injectError) {
+            // If injection also fails, return helpful error
+            return { 
+              error: "Failed to load content script. Please refresh the LinkedIn page and try again." 
+            };
+          }
+        } else {
+          throw messageError;
+        }
+      }
+
+      if (!domData || domData.error) {
+        return domData || { error: "No response from content script" };
+      }
+
+      return domData;
+    } catch (error) {
+      console.error("Error extracting conversation:", error);
+      const errorMsg = error.message || "Failed to extract conversation";
+      
+      // Provide helpful error message
+      if (errorMsg.includes("Receiving end does not exist") || errorMsg.includes("Could not establish connection")) {
+        return { 
+          error: "Content script not loaded. Please refresh the LinkedIn page and try again." 
+        };
+      }
+      
+      return { error: errorMsg };
+    }
+  }
+
+  // Legacy method - kept for reference but replaced with message passing
+  async extractConversationFromActiveTab_OLD(tabId) {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
@@ -2169,24 +2408,61 @@ class DOMExtractor {
   }
 
   async persistConversation(conversationData) {
-    // Save locally
-    const storageKey = `linkedin_conversation_${conversationData.threadId}`;
-    const savedData = {
-      ...conversationData,
-      savedAt: new Date().toISOString(),
-    };
-    this.addConsoleLog("LOCAL", "Saved to chrome.storage", {
-      threadId: conversationData.threadId,
-    });
-    await chrome.storage.local.set({ [storageKey]: savedData });
-    // Save to Supabase
-    this.addConsoleLog("DB", "Writing to Supabase", {
-      threadId: conversationData.threadId,
-    });
-    await this.supabaseService.saveConversation(conversationData);
-    this.addConsoleLog("DB", "Write complete", {
-      threadId: conversationData.threadId,
-    });
+    try {
+      // Save locally
+      const storageKey = `linkedin_conversation_${conversationData.threadId}`;
+      const savedData = {
+        ...conversationData,
+        savedAt: new Date().toISOString(),
+      };
+      this.addConsoleLog("LOCAL", "Saved to chrome.storage", {
+        threadId: conversationData.threadId,
+      });
+      await chrome.storage.local.set({ [storageKey]: savedData });
+      
+      // Log data being saved to Supabase
+      this.addConsoleLog("DB", "Preparing to save to Supabase", {
+        threadId: conversationData.threadId,
+        title: conversationData.title,
+        description: conversationData.description ? conversationData.description.substring(0, 100) + "..." : "none",
+        messageCount: conversationData.messageCount || conversationData.messages?.length || 0,
+        url: conversationData.url,
+        hasPlaceholders: !!(conversationData.placeholders && Object.keys(conversationData.placeholders).length > 0),
+        placeholders: conversationData.placeholders || {},
+        status: conversationData.status || "unknown",
+        participants: conversationData.participants || [],
+        hasStatistics: !!conversationData.statistics,
+        messagesPreview: conversationData.messages?.slice(0, 3).map(m => ({
+          index: m.index,
+          sender: m.sender,
+          textPreview: m.text?.substring(0, 50) + "...",
+          attachmentsCount: m.attachments?.length || 0,
+          reactionsCount: m.reactions?.length || 0,
+          linksCount: m.links?.length || 0,
+          mentionsCount: m.mentions?.length || 0
+        })) || []
+      });
+      
+      // Save to Supabase
+      this.addConsoleLog("DB", "Writing to Supabase", {
+        threadId: conversationData.threadId,
+      });
+      
+      const result = await this.supabaseService.saveConversation(conversationData);
+      
+      this.addConsoleLog("DB", "Write complete", {
+        threadId: conversationData.threadId,
+        result: result
+      });
+    } catch (error) {
+      this.addConsoleLog("DB", "Save to Supabase FAILED", {
+        threadId: conversationData.threadId,
+        error: error.message || String(error),
+        errorStack: error.stack,
+        conversationDataKeys: Object.keys(conversationData || {})
+      });
+      throw error; // Re-throw so caller can handle it
+    }
   }
 
   downloadConversationJSON(conversationData) {
@@ -3054,10 +3330,10 @@ class DOMExtractor {
         finalLength: scriptText.length,
       });
 
-      // Inject the script into the message input
+      // Copy the script to clipboard
       await this.aiService.injectResponse(scriptText, tab.id);
 
-      this.addConsoleLog("SCRIPTS", "Script inserted", {
+      this.addConsoleLog("SCRIPTS", "Script copied to clipboard", {
         phase,
         templateId,
         length: scriptText.length,

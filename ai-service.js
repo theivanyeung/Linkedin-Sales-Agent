@@ -92,56 +92,64 @@ class AIService {
   }
 
   /**
-   * Inject response into LinkedIn message input field
+   * Copy response to clipboard (replaces DOM injection to avoid detection)
+   * User will manually paste into LinkedIn message input field
+   * Uses content script to copy, which works even without user gesture
    */
   async injectResponse(messageText, tabId = null) {
     try {
-      const currentTab = tabId
-        ? await chrome.tabs.get(tabId)
-        : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
-
-      if (!currentTab.url.includes("linkedin.com/messaging")) {
-        throw new Error("Not on a LinkedIn messaging page");
-      }
-
-      // Inject the response
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: currentTab.id },
-        func: (text) => {
-          // Find the message input field
-          const inputField = document.querySelector(
-            ".msg-form__contenteditable"
-          );
-          if (!inputField) {
-            return { error: "Message input field not found" };
+      // First try: Use content script to copy (works without user gesture)
+      if (tabId) {
+        try {
+          const response = await chrome.tabs.sendMessage(tabId, {
+            action: 'copyToClipboard',
+            text: messageText
+          });
+          
+          if (response && response.success) {
+            console.log("Response copied to clipboard via content script.");
+            return { success: true, method: "clipboard-content-script" };
           }
-
-          // Focus the input field
-          inputField.focus();
-
-          // Clear existing content
-          inputField.innerHTML = "";
-
-          // Insert the text
-          inputField.innerHTML = `<p>${text}</p>`;
-
-          // Trigger input event to notify LinkedIn
-          const inputEvent = new Event("input", { bubbles: true });
-          inputField.dispatchEvent(inputEvent);
-
-          return { success: true };
-        },
-        args: [messageText],
-      });
-
-      if (results && results[0] && results[0].result) {
-        return results[0].result;
+        } catch (messageError) {
+          // Content script might not be loaded, try direct method
+          console.log("Content script copy failed, trying direct method...");
+        }
       }
-
-      throw new Error("Failed to inject response");
+      
+      // Fallback: Try direct clipboard API (requires user gesture, may fail)
+      try {
+        await navigator.clipboard.writeText(messageText);
+        console.log("Response copied to clipboard via direct API.");
+        return { success: true, method: "clipboard-direct" };
+      } catch (clipboardError) {
+        // If both fail, try injecting content script and retrying
+        if (tabId) {
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: tabId },
+              files: ['content-script.js']
+            });
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            const response = await chrome.tabs.sendMessage(tabId, {
+              action: 'copyToClipboard',
+              text: messageText
+            });
+            
+            if (response && response.success) {
+              console.log("Response copied to clipboard after injecting content script.");
+              return { success: true, method: "clipboard-injected" };
+            }
+          } catch (injectError) {
+            console.error("All clipboard methods failed:", injectError);
+          }
+        }
+        
+        throw new Error("Failed to copy to clipboard. Please copy the message manually.");
+      }
     } catch (error) {
-      console.error("Error injecting response:", error);
-      throw error;
+      console.error("Error copying to clipboard:", error);
+      throw new Error("Failed to copy to clipboard. Please copy the message manually.");
     }
   }
 
@@ -267,15 +275,15 @@ class AIService {
 
       console.log("AI generated response:", aiResult);
 
-      // INJECT INTO INPUT FIELD
-      // SECURITY NOTE: This injects into input field only
-      // User MUST manually click LinkedIn's send button
-      // This is same as copy-paste - standard browser behavior
+      // COPY TO CLIPBOARD
+      // SECURITY NOTE: No DOM manipulation - just copies to clipboard
+      // User will manually paste and click send in LinkedIn
+      // This is completely undetectable by LinkedIn
       await this.injectResponse(aiResult.response, tab.id);
 
-      // Return result with security reminder
+      // Return result with reminder
       console.log(
-        "⚠️ SECURITY: Response injected. YOU must manually click send in LinkedIn. No auto-send."
+        "✅ Response copied to clipboard. Paste into LinkedIn message field and send manually."
       );
 
       return aiResult;

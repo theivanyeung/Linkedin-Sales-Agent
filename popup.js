@@ -318,7 +318,7 @@ class DOMExtractor {
       const leadCard = document.getElementById("leadCard");
       if (leadCard) {
         // Remove all status classes
-        leadCard.classList.remove("status-unknown", "status-interested", "status-enrolled", "status-ambassador", "status-uninterested");
+        leadCard.classList.remove("status-unknown", "status-interested", "status-enrolled", "status-ambassador", "status-uninterested", "status-graduated");
         // Add the new status class
         leadCard.classList.add(`status-${status}`);
       }

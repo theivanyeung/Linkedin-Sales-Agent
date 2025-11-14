@@ -493,7 +493,7 @@ class SupabaseService {
         window.uiConsoleLog("DB", "updateLeadStatus", { threadId, status });
       console.log("DB UPDATE: updateLeadStatus threadId=", threadId, "status=", status);
 
-      const validStatuses = ['unknown', 'uninterested', 'interested', 'enrolled', 'ambassador'];
+      const validStatuses = ['unknown', 'uninterested', 'interested', 'enrolled', 'ambassador', 'graduated'];
       if (!validStatuses.includes(status)) {
         throw new Error(`Invalid status: ${status}. Must be one of: ${validStatuses.join(', ')}`);
       }

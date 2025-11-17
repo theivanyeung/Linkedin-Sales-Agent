@@ -17,3 +17,6 @@ COMMENT ON COLUMN public.conversations.status IS
 'Lead status: unknown (default), uninterested, interested, enrolled, ambassador, graduated';
 
 
+
+
+

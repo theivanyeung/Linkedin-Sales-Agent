@@ -42,6 +42,18 @@ PHASE_LIBRARY: Dict[str, Dict[str, Any]] = {
                     ),
                 },
             },
+            "no_initiative": {
+                "description": "Probes for students who aren't working on projects or ideas yet.",
+                "probes": {
+                    "uncover_interests_probe": (
+                        "I see. What are you most excited about right now? What are your main interests outside of school?"
+                    ),
+                    "barriers_and_vision_probe": (
+                        "What's holding you back from exploring those interests, like busy with class or finding direction? "
+                        "If you could start something meaningful, what would that look like?"
+                    ),
+                },
+            },
             "relevance_context": {
                 "description": "Light touch context that keeps things personal.",
                 "script": (
@@ -51,9 +63,9 @@ PHASE_LIBRARY: Dict[str, Dict[str, Any]] = {
             },
         },
         "guidelines": [
-            "Ask follow-up questions to understand their project or idea deeply.",
-            "Show genuine interest and validate the student’s work.",
-            "Use the probes strategically based on what they’ve already shared.",
+            "Ask follow-up questions to understand their project/idea deeply OR their interests if they're not working on anything yet.",
+            "Show genuine interest and validate the student's work or interests.",
+            "Use the appropriate probes based on their situation - whether they have initiative or not.",
             "Keep responses short, conversational, and natural.",
         ],
     },
@@ -164,11 +176,21 @@ def get_initial_message_template() -> str:
 
 
 def get_question_probes() -> Dict[str, str]:
-    """Question probes to uncover motivation, pain points, and vision."""
+    """Question probes to uncover motivation, pain points, and vision (for students with initiative)."""
     return (
         PHASE_LIBRARY["building_rapport"]
         .get("sections", {})
         .get("engaging_with_lead", {})
+        .get("probes", {})
+    )
+
+
+def get_no_initiative_probes() -> Dict[str, str]:
+    """Question probes for students who aren't working on projects or ideas yet."""
+    return (
+        PHASE_LIBRARY["building_rapport"]
+        .get("sections", {})
+        .get("no_initiative", {})
         .get("probes", {})
     )
 
@@ -255,10 +277,20 @@ def get_prompt_blocks(phase: str) -> List[str]:
 
     sections = config.get("sections", {})
     if phase == "building_rapport":
+        # Probes for students WITH initiative (working on projects/ideas)
         probes = sections.get("engaging_with_lead", {}).get("probes", {})
         if probes:
-            blocks.append("Available Question Probes:")
+            blocks.append("Available Question Probes (if they're working on projects/ideas):")
             for idx, (key, value) in enumerate(probes.items(), 1):
+                label = key.replace("_", " ").title()
+                blocks.append(f"{idx}. {label}: {value}")
+            blocks.append("")
+
+        # Probes for students WITHOUT initiative (not working on anything yet)
+        no_initiative_probes = sections.get("no_initiative", {}).get("probes", {})
+        if no_initiative_probes:
+            blocks.append("Available Question Probes (if they're NOT working on anything):")
+            for idx, (key, value) in enumerate(no_initiative_probes.items(), 1):
                 label = key.replace("_", " ").title()
                 blocks.append(f"{idx}. {label}: {value}")
             blocks.append("")
@@ -342,12 +374,16 @@ def get_conversation_guidance(
 
     if phase == "building_rapport":
         probes = get_question_probes()
+        no_initiative_probes = get_no_initiative_probes()
+        all_questions = list(probes.values()) + list(no_initiative_probes.values())
         guidance.update(
             {
                 "next_step": (
-                    "Ask probing questions to understand their motivation, pain points, and vision"
+                    "Ask probing questions to understand their motivation, pain points, and vision. "
+                    "Use probes for students WITH initiative if they're working on projects/ideas, "
+                    "or probes for students WITHOUT initiative if they're not working on anything yet."
                 ),
-                "key_questions": list(probes.values()),
+                "key_questions": all_questions,
                 "context_to_use": get_rapport_context(),
             }
         )
@@ -383,8 +419,8 @@ def get_phase_specific_context(phase: str) -> str:
     if phase == "building_rapport":
         return (
             "You are in the BUILDING RAPPORT phase. Your goal is to engage the lead, "
-            "ask thoughtful questions about their projects/ideas, understand their motivation, "
-            "pain points, and vision. Use the provided question probes strategically. "
+            "ask thoughtful questions about their projects/ideas OR their interests if they're not working on anything yet, "
+            "understand their motivation, pain points, and vision. Use the appropriate question probes based on their situation. "
             "Keep messages short, conversational, and show genuine interest."
         )
     if phase == "doing_the_ask":

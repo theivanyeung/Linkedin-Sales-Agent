@@ -84,31 +84,38 @@ def retrieve(query: str, k: int = 5, threshold: float = 0.7) -> List[Dict[str, A
     Retrieve top-k knowledge base snippets for the given query.
 
     Returns list of dictionaries containing source, question, snippet, and similarity.
+    Returns empty list if KB is not configured or on any error.
     """
     query = (query or "").strip()
     if not query:
         return []
 
-    embedding = _embed_text(query)
-    supabase = _get_supabase()
-
     try:
-        response = supabase.rpc(
-            "match_kb_documents",
-            {
-                "query_embedding": embedding,
-                "match_threshold": threshold,
-                "match_count": k,
-            },
-        ).execute()
-    except Exception:
-        # Fallback if RPC is not available
-        response = (
-            supabase.table("kb_documents")
-            .select("id, source, question, answer, tags")
-            .limit(k)
-            .execute()
-        )
+        # Generate embedding for semantic search
+        embedding = _embed_text(query)
+        
+        # Get Supabase client
+        supabase = _get_supabase()
+
+        # Try vector similarity search via RPC
+        try:
+            response = supabase.rpc(
+                "match_kb_documents",
+                {
+                    "query_embedding": embedding,
+                    "match_threshold": threshold,
+                    "match_count": k,
+                },
+            ).execute()
+        except Exception:
+            # Fallback if RPC is not available - use simple table query
+            response = (
+                supabase.table("kb_documents")
+                .select("id, source, question, answer, tags")
+                .limit(k)
+                .execute()
+            )
+        
         rows = response.data or []
         return [
             {
@@ -117,23 +124,19 @@ def retrieve(query: str, k: int = 5, threshold: float = 0.7) -> List[Dict[str, A
                 "question": row.get("question"),
                 "snippet": row.get("answer"),
                 "tags": row.get("tags", []),
-                "similarity": None,
+                "similarity": row.get("similarity"),
             }
             for row in rows
         ]
-
-    rows = response.data or []
-    return [
-        {
-            "id": row.get("id"),
-            "source": row.get("source"),
-            "question": row.get("question"),
-            "snippet": row.get("answer"),
-            "tags": row.get("tags", []),
-            "similarity": row.get("similarity"),
-        }
-        for row in rows
-    ]
+    except (RuntimeError, ValueError) as e:
+        # KB not configured (missing Supabase or OpenAI API key)
+        # Return empty list - system will work without KB
+        return []
+    except Exception as e:
+        # Any other error - log and return empty list
+        import sys
+        print(f"[KB] Error retrieving knowledge base: {e}", file=sys.stderr)
+        return []
 
 
 def list_recent(limit: int = 20) -> List[Dict[str, Any]]:

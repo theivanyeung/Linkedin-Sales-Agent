@@ -36,14 +36,16 @@ def generate_response(conv: Conversation) -> str:
             f"KB snippets={len(knowledge_context or [])}"
         )
     
-    # Build conversation context
-    recent_messages = conv.messages[-10:] if len(conv.messages) > 10 else conv.messages
-    conversation_text = "\n".join([
-        f"{'You' if msg.sender == 'you' else 'Prospect'}: {msg.text}"
-        for msg in recent_messages
-    ])
+    # Handle empty conversations
+    if not conv.messages:
+        if Config.DEBUG:
+            print("[Generator] Warning: Empty conversation, using fallback")
+        return "hey! what's up?"
     
     prospect_name = next((p.name for p in conv.participants if p.role == "prospect"), "Prospect")
+    
+    # Get recent messages for context (last 10 or all if fewer)
+    recent_messages = conv.messages[-10:] if len(conv.messages) > 10 else conv.messages
     
     # Get conversation state for guidance
     conversation_state = {
@@ -68,71 +70,140 @@ def generate_response(conv: Conversation) -> str:
     # Build system prompt with KB context and static scripts
     kb_context_text = ""
     if knowledge_context:
-        kb_context_text = "\n\nKnowledge Base Context:\n" + "\n".join([
-            f"- {snippet.get('source', '')}: {snippet.get('snippet', '')}"
-            for snippet in knowledge_context[:3]
-        ])
+        kb_context_text = "\n\n=== KNOWLEDGE BASE CONTEXT ===\n"
+        kb_context_text += "Use this information to answer questions accurately. This includes background info, friends, schools, and other context:\n\n"
+        for idx, snippet in enumerate(knowledge_context[:5], 1):  # Show up to 5 snippets
+            source = snippet.get('source', 'General')
+            snippet_text = snippet.get('snippet', snippet.get('answer', ''))
+            question = snippet.get('question', '')
+            
+            # Format nicely
+            if question:
+                kb_context_text += f"{idx}. Q: {question}\n"
+            if snippet_text:
+                kb_context_text += f"   A: {snippet_text}\n"
+            if source and source != 'General':
+                kb_context_text += f"   Source: {source}\n"
+            kb_context_text += "\n"
     
-    # Build static scripts context
-    scripts_context = "\n\n=== STATIC SCRIPTS & GUIDANCE ===\n"
+    # Build static scripts context - frame as GUIDELINES, not templates
+    scripts_context = "\n\n=== CONVERSATION GUIDELINES (NOT TEMPLATES) ===\n"
+    scripts_context += "IMPORTANT: The scripts below are GUIDELINES for conversation flow, NOT templates to copy word-for-word. "
+    scripts_context += "You must adapt to the actual conversation naturally. If the student asks a question or the conversation "
+    scripts_context += "takes an interesting turn, respond authentically to that - don't force the script. Build genuine rapport first.\n\n"
+    
     scripts_context += phase_context + "\n\n"
+    
     if prompt_blocks:
+        scripts_context += "These are reference points for the conversation direction, but always prioritize natural flow:\n"
         scripts_context += "\n".join(prompt_blocks)
     
     # Add specific guidance for selling phase
     if phase == "doing_the_ask" and result.get("ready_for_ask", False):
         scripts_context += "\n\n=== READY FOR APPLICATION ===\n"
-        scripts_context += "The lead is ready. You can introduce Prodicity and share the application link if they show interest.\n"
-        scripts_context += f"Application info: {get_application_info()}\n"
-        scripts_context += f"Examples: {get_prodicity_examples()}\n"
+        scripts_context += "The lead is ready. You can introduce Prodicity naturally when it fits the conversation flow. "
+        scripts_context += "Don't force it - wait for a natural opening.\n"
+        scripts_context += f"Application info (use when they ask or show interest): {get_application_info()}\n"
+        scripts_context += f"Examples (reference if relevant): {get_prodicity_examples()}\n"
     if Config.DEBUG:
         print("[Generator] System prompt prepared.")
     
     system_prompt = (
-        "You are a sales agent for Prodicity, helping high school students ship real outcomes "
-        "(startups, research, internships, passion projects). "
-        "Keep messages SHORT (max 200 chars), casual, friendly, like talking to a friend. "
-        "Be natural and understated - don't be overly enthusiastic or salesy. "
-        "NO EMOJIS. NO MARKDOWN. Just plain text like a normal text message.\n\n"
+        "You are a sales agent for Prodicity, a selective fellowship helping high school students ship real outcomes "
+        "(startups, research, internships, passion projects). Your goal is to build genuine rapport and guide students "
+        "toward applying when they're ready.\n\n"
+        "STYLE GUIDELINES:\n"
+        "- Keep messages SHORT (max 200 chars) - like a text message\n"
+        "- Casual, friendly tone - like talking to a friend, not a sales pitch\n"
+        "- Be natural and understated - don't be overly enthusiastic or salesy\n"
+        "- NO EMOJIS. NO MARKDOWN. Just plain text like a normal message\n"
+        "- Show genuine interest in what they're working on\n\n"
+        "CRITICAL CONVERSATION RULES:\n"
+        "1. ALWAYS respond naturally to what the student actually says first\n"
+        "2. If they ask a question, answer it directly and helpfully\n"
+        "3. If the conversation goes in an interesting direction, follow it - don't force the script\n"
+        "4. The guidelines below are for general direction, but actual conversation flow is more important\n"
+        "5. Don't copy scripts verbatim - adapt them to the context naturally\n"
+        "6. Build genuine rapport before selling - students can sense when you're just following a script\n\n"
         f"Current phase: {phase}\n"
-        f"Recommendation: {recommendation}\n"
+        f"Analyst recommendation: {recommendation}\n"
         f"{scripts_context}"
         f"{kb_context_text}"
     )
     
-    # Build user prompt with conversation context and guidance
-    guidance_hint = ""
-    if phase == "building_rapport":
-        guidance_hint = "\n\nGuidance: Ask thoughtful questions to understand their project/idea. Use the question probes provided in the system prompt."
-    elif phase == "doing_the_ask":
-        guidance_hint = "\n\nGuidance: If appropriate, introduce Prodicity in a way that's relevant to what they've shared. Reference specific things from the conversation."
-        if result.get("ready_for_ask", False):
-            guidance_hint += " The lead is ready - you can share the application link if they show interest."
+    # Build multi-turn conversation messages array
+    messages = []
+    
+    # 1. Add system message (contains instructions, scripts, KB)
+    messages.append({"role": "system", "content": system_prompt})
+    
+    # 2. Add conversation history as alternating user/assistant messages
+    # Only include messages up to (but not including) the last one
+    conversation_history = recent_messages[:-1] if len(recent_messages) > 1 else []
+    
+    for msg in conversation_history:
+        if msg.sender == "prospect":
+            messages.append({"role": "user", "content": msg.text})
+        elif msg.sender == "you":
+            messages.append({"role": "assistant", "content": msg.text})
+        # Skip "other" sender type
+    
+    # 3. Add current prospect message (what we're responding to)
+    if recent_messages:
+        last_msg = recent_messages[-1]
+        if last_msg.sender == "prospect":
+            # Build guidance hint for the current message
+            guidance_hint = ""
+            if phase == "building_rapport":
+                guidance_hint = (
+                    "\n\n[Guidance: Respond naturally to what they said. "
+                    "If they asked a question, answer it directly. "
+                    "Adapt the question probes from system prompt to the conversation.]"
+                )
+            elif phase == "doing_the_ask":
+                guidance_hint = (
+                    "\n\n[Guidance: Respond naturally first. "
+                    "If appropriate, introduce Prodicity naturally. "
+                    "Don't force it - wait for a natural opening.]"
+                )
+                if result.get("ready_for_ask", False):
+                    guidance_hint += " The lead is ready - you can share the application link if they show interest."
+            
+            messages.append({
+                "role": "user",
+                "content": last_msg.text + guidance_hint
+            })
+        elif last_msg.sender == "you":
+            # Last message is from us - this shouldn't happen in normal flow,
+            # but handle it gracefully by not adding it (we already responded)
+            if Config.DEBUG:
+                print("[Generator] Warning: Last message is from us, skipping")
+    
+    # Ensure we have at least one user message
+    if not any(msg["role"] == "user" for msg in messages):
+        if Config.DEBUG:
+            print("[Generator] Warning: No user messages in conversation, using fallback")
+        return "hey! what's up?"
+    
     if Config.DEBUG:
-        print("[Generator] User prompt guidance:", guidance_hint.strip())
+        print(f"[Generator] Built {len(messages)} messages (1 system + {len(messages)-1} conversation turns)")
     
-    user_prompt = (
-        f"Generate your next response to {prospect_name} based on this conversation:\n\n"
-        f"{conversation_text}\n"
-        f"{guidance_hint}\n\n"
-        f"Your response (SHORT, casual, friendly, max 200 chars, JUST plain text message, NO emojis, NO markdown):"
-    )
-    
-    # Generate response using traditional chat.completions
+    # Generate response using multi-turn conversation format
     from openai import OpenAI
     
     client = OpenAI(api_key=Config.OPENAI_API_KEY)
     
     try:
+        # Calculate max_tokens: 200 chars ≈ 50-60 tokens, but give headroom for cleanup
+        # Average English: ~4 chars per token, so 200 chars = ~50 tokens, use 80 for safety
+        max_tokens_for_response = 80
+        
         chat_kwargs = {
             "model": Config.OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "max_tokens": 100,
+            "messages": messages,  # Multi-turn format
+            "max_tokens": max_tokens_for_response,
         }
-        # Only include temperature if model supports it
+        # Include temperature for gpt-4o (and most models except gpt-5)
         if Config.OPENAI_MODEL not in ["gpt-5"]:
             chat_kwargs["temperature"] = 0.7
         

@@ -45,16 +45,37 @@ def _conversation_to_text(conv: Conversation) -> str:
 def analyze_conversation(conv: Conversation) -> Dict[str, Any]:
     """Run a single Responses API call to analyze the conversation."""
     system_prompt = (
-        "You are a sales conversation analyst for Prodicity. "
-        "Return ONLY a JSON object as per the provided schema."
+        "You are a sales conversation analyst for Prodicity, a selective fellowship for high school students. "
+        "Analyze conversations to determine the right sales phase and engagement level. "
+        "Return ONLY a JSON object as per the provided schema.\n\n"
+        "Phase Guidelines:\n"
+        "- 'building_rapport': Early stage, building relationship, asking questions, not selling yet\n"
+        "- 'doing_the_ask': Ready to introduce Prodicity, student is engaged and asking questions\n\n"
+        "Sentiment: -1 (very negative) to 1 (very positive). Consider tone, enthusiasm, interest.\n"
+        "Engagement: 0 (no engagement) to 1 (highly engaged). Consider response length, questions asked, enthusiasm.\n"
+        "has_questions: True if student is asking questions (shows interest/engagement).\n"
+        "has_negative_signal: True if student shows disinterest, says no, or is negative.\n"
+        "recommendation: Brief actionable recommendation for next step."
     )
 
+    # Count messages for context
+    total_messages = len(conv.messages)
+    prospect_messages = sum(1 for m in conv.messages if m.sender == "prospect")
+    
     user_prompt = (
-        "Analyze the conversation below and produce: phase, sentiment (-1..1), "
-        "engagement (0..1), has_questions (bool), has_negative_signal (bool), recommendation.\n\n"
-        f"Conversation title: {conv.title}\n"
-        f"Description: {conv.description or ''}\n\n"
-        f"Recent conversation:\n{_conversation_to_text(conv)}\n"
+        "Analyze this sales conversation and determine:\n"
+        "- phase: 'building_rapport' or 'doing_the_ask'\n"
+        "- sentiment: -1 to 1 (how positive/negative is the student's tone?)\n"
+        "- engagement: 0 to 1 (how engaged is the student?)\n"
+        "- has_questions: true if student is asking questions\n"
+        "- has_negative_signal: true if student shows disinterest or says no\n"
+        "- recommendation: what should the sales agent do next?\n\n"
+        f"Conversation context:\n"
+        f"- Title: {conv.title}\n"
+        f"- Total messages: {total_messages} (Prospect: {prospect_messages})\n"
+        f"- Description: {conv.description or 'None'}\n\n"
+        f"Recent conversation:\n{_conversation_to_text(conv)}\n\n"
+        "Be accurate and conservative. Only move to 'doing_the_ask' if student is clearly engaged and asking questions."
     )
 
     client = ResponsesClient()

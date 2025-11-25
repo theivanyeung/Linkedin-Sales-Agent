@@ -65,4 +65,4 @@ class ResponsesClient:
                     pass
             return {"_raw": text}
 
-
+cd

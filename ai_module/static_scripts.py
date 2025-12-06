@@ -398,6 +398,8 @@ def get_conversation_guidance(
             }
         )
 
+        # Note: Legacy heuristic check - phase is now determined by GPT-5.1's move_forward decision
+        # This check will rarely trigger since has_questions is no longer provided
         if conversation_state:
             messages_count = conversation_state.get("message_count", 0)
             prospect_messages = conversation_state.get("prospect_message_count", 0)
@@ -407,7 +409,7 @@ def get_conversation_guidance(
                 guidance["ready_to_introduce_prodicity"] = True
                 guidance[
                     "next_step"
-                ] = "Consider introducing Prodicity if sentiment is positive"
+                ] = "Consider introducing Prodicity when ready"
 
     elif phase == "doing_the_ask":
         introduction_variants = get_prodicity_introduction_variants()

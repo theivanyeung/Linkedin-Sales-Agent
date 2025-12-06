@@ -13,9 +13,12 @@ class Config:
     
     # OpenAI Configuration
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
     TEMPERATURE = 0.7
     MAX_TOKENS = 500
+    
+    # Anthropic Configuration
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
     
     # Flask Configuration
     FLASK_HOST = os.getenv("FLASK_HOST", "127.0.0.1")
@@ -41,6 +44,8 @@ class Config:
         """Validate that required configuration is present."""
         if not cls.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is required. Set it in .env file or environment.")
+        if not cls.ANTHROPIC_API_KEY:
+            print("Warning: ANTHROPIC_API_KEY is not set. Response generation will fail without it.")
         return True
 
 # Validate configuration on import

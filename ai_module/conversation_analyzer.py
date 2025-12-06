@@ -13,13 +13,14 @@ def analyze_conversation_state(messages: List[Dict[str, Any]], prospect_name: st
             "phase": "building_rapport",
             "recommendation": "Start with initial outreach to build rapport",
             "analysis_details": {
-                "sentiment_score": 0.0,
-                "engagement_score": 0.0,
-                "has_questions": False,
+                "sentiment_score": 0.0,  # Legacy field - kept for backward compatibility
+                "engagement_score": 0.0,  # Legacy field - kept for backward compatibility
+                "has_questions": False,  # Legacy field - kept for backward compatibility
                 "total_messages": 0,
                 "prospect_message_count": 0,
                 "ready_for_ask": False,
-                "criteria_met": {}
+                "criteria_met": {},  # Legacy field - kept for backward compatibility
+                "has_negative_signal": False,  # Legacy field - kept for backward compatibility
             }
         }
 
@@ -35,19 +36,20 @@ def analyze_conversation_state(messages: List[Dict[str, Any]], prospect_name: st
     conv = build_conversation(thread_data, messages)
     result = run_pipeline(conv)
 
-    # Map to legacy-ish structure
+    # Map to legacy structure for backward compatibility
+    # Note: sentiment_score and engagement_score are now hardcoded to 0.0 since we use pure agentic decision
     return {
         "phase": result["phase"],
-        "recommendation": result["recommendation"],
+        "recommendation": result.get("recommendation", result.get("instruction_for_writer", "")),
         "analysis_details": {
-            "sentiment_score": result["scores"]["sentiment"],
-            "engagement_score": result["scores"]["engagement"],
-            "has_questions": result["signals"]["has_questions"],
-            "total_messages": result["signals"]["message_count"],
-            "prospect_message_count": result["signals"]["prospect_message_count"],
+            "sentiment_score": 0.0,  # Legacy field - no longer calculated
+            "engagement_score": 0.0,  # Legacy field - no longer calculated
+            "has_questions": False,  # Legacy field - no longer calculated
+            "total_messages": len(messages),
+            "prospect_message_count": sum(1 for m in messages if m.get("sender") == "prospect"),
             "ready_for_ask": result["ready_for_ask"],
-            "has_negative_signal": result["signals"]["has_negative_signal"],
-            "criteria_met": result["criteria_met"],
+            "has_negative_signal": False,  # Legacy field - no longer calculated
+            "criteria_met": {},  # Legacy field - no longer used
         },
     }
 

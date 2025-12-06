@@ -1,12 +1,12 @@
 """
-Pipeline orchestrator: KB (stub) -> analyzer (single Responses call) -> readiness gate.
-Emits unified AnalysisResult JSON.
+Pipeline orchestrator: KB retrieval -> analyzer (pure agentic decision) -> unified result.
+Emits unified AnalysisResult JSON based on GPT-5-mini's strategic assessment.
 """
 
+import time
 from typing import Dict, Any, List
 from io_models import Conversation
 from analyzer import analyze_conversation
-from policies.readiness import evaluate_readiness
 from knowledge_base import retrieve as kb_retrieve
 from static_scripts import get_prompt_blocks, cta_templates, get_conversation_guidance
 from config import Config
@@ -146,20 +146,18 @@ def _build_kb_query(conv: Conversation, phase: str) -> str:
 
 
 def run_pipeline(conv: Conversation) -> Dict[str, Any]:
+    pipeline_start = time.time()
+    
     # Handle empty conversations
+    # Note: Edge case where len(conv.messages) == 0 is handled here.
+    # If history ingest misses the first message but we have a prospect reply,
+    # response_generator.py will inject context to prevent re-introduction.
     if not conv.messages:
         return {
             "phase": "building_rapport",
             "ready_for_ask": False,
-            "scores": {"sentiment": 0.0, "engagement": 0.0},
-            "signals": {
-                "has_questions": False,
-                "has_negative_signal": False,
-                "message_count": 0,
-                "prospect_message_count": 0,
-            },
-            "criteria_met": {},
-            "recommendation": "Start conversation with initial outreach",
+            "instruction_for_writer": "Start conversation with initial outreach",
+            "reasoning": "No messages yet - beginning conversation",
             "knowledge_context": [],
             "next_message_suggestion": {"text": "", "cta": None, "variables": {}},
             "conversation_guidance": {"next_step": "Start with initial message"},
@@ -167,81 +165,101 @@ def run_pipeline(conv: Conversation) -> Dict[str, Any]:
             "timestamps": {},
         }
     
-    # Analyze with single-pass LLM to get phase and metrics
+    # Analyze with GPT-5-mini to get strategic decision
+    analyzer_start = time.time()
     try:
         analysis = analyze_conversation(conv)
-    except Exception as e:
+        analyzer_time = time.time() - analyzer_start
         if Config.DEBUG:
-            print(f"[Orchestrator] Analysis error: {e}, using defaults")
+            if analyzer_time < 1:
+                print(f"[Orchestrator] Analyzer (OpenAI API) completed: {analyzer_time*1000:.0f}ms")
+            else:
+                print(f"[Orchestrator] Analyzer (OpenAI API) completed: {analyzer_time:.2f}s")
+    except Exception as e:
+        error_msg = str(e)
+        if Config.DEBUG:
+            print(f"[Orchestrator] Analysis error: {error_msg}, using defaults")
+            # Provide helpful context for common errors
+            if "proxies" in error_msg.lower():
+                print("[Orchestrator] Note: This may be a Supabase client version conflict. KB retrieval may fail but analysis should continue.")
+            elif "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+                print("[Orchestrator] Note: Check OPENAI_API_KEY in .env file")
+            elif "model" in error_msg.lower() and ("not found" in error_msg.lower() or "invalid" in error_msg.lower()):
+                print("[Orchestrator] Note: GPT-5.1 model may not be available. Consider using 'o1-preview' or 'o1' as fallback.")
         # Fallback analysis
         analysis = {
+            "reasoning": f"Error occurred during analysis: {error_msg[:100]}",
+            "move_forward": False,
+            "instruction_for_writer": "Continue building rapport - ask about their interests or school",
             "phase": "building_rapport",
-            "sentiment": 0.0,
-            "engagement": 0.0,
-            "has_questions": False,
-            "has_negative_signal": False,
-            "recommendation": "Continue building rapport",
         }
     
-    phase = analysis.get("phase", "building_rapport")
+    # Extract strategic plan from analyzer
+    reasoning = analysis.get("reasoning", "No reasoning provided")
+    move_forward = analysis.get("move_forward", False)
+    instruction_for_writer = analysis.get("instruction_for_writer", "")
+    analyzer_phase = analysis.get("phase", "building_rapport")
+    
+    if Config.DEBUG:
+        print(
+            "[Orchestrator] Analyzer strategic decision -> "
+            f"move_forward={move_forward}, analyzer_phase={analyzer_phase}, "
+            f"messages={len(conv.messages)}"
+        )
+        print(f"[Orchestrator] Reasoning: {reasoning[:200]}...")
+        print(f"[Orchestrator] Instruction for writer: {instruction_for_writer}")
+    
+    # Pure agentic decision: Trust GPT-5.1's move_forward boolean completely
+    # Phase is determined solely by move_forward decision
+    if move_forward:
+        phase = "doing_the_ask"
+        ready_for_ask = True
+        if Config.DEBUG:
+            print(f"[Orchestrator] Analyzer says move_forward=True -> phase='doing_the_ask'")
+    else:
+        phase = "building_rapport"
+        ready_for_ask = False
+        if Config.DEBUG:
+            print(f"[Orchestrator] Analyzer says move_forward=False -> phase='building_rapport'")
     
     # Build intelligent KB query based on conversation content and phase
+    kb_query_start = time.time()
     kb_query = _build_kb_query(conv, phase)
+    kb_query_time = time.time() - kb_query_start
+    if Config.DEBUG:
+        if kb_query_time < 0.001:
+            print(f"[Orchestrator] KB query building completed: {kb_query_time*1000:.2f}ms")
+        else:
+            print(f"[Orchestrator] KB query building completed: {kb_query_time*1000:.2f}ms")
     
     # Retrieve KB snippets (with error handling)
+    kb_start = time.time()
     try:
         kb_snippets = kb_retrieve(query=kb_query, k=5)
+        kb_time = time.time() - kb_start
+        if Config.DEBUG:
+            if kb_time < 1:
+                print(f"[Orchestrator] KB retrieval completed: {kb_time*1000:.0f}ms")
+            else:
+                print(f"[Orchestrator] KB retrieval completed: {kb_time:.2f}s")
         if Config.DEBUG:
             print(f"[Orchestrator] KB query: {kb_query[:100]}")
             print(f"[Orchestrator] KB snippets retrieved: {len(kb_snippets)}")
             if kb_snippets:
                 print(f"[Orchestrator] KB sources: {[s.get('source', 'N/A') for s in kb_snippets[:3]]}")
     except Exception as e:
+        kb_time = time.time() - kb_start
         if Config.DEBUG:
-            print(f"[Orchestrator] KB retrieval error: {e}")
+            if kb_time < 1:
+                print(f"[Orchestrator] KB retrieval error (after {kb_time*1000:.0f}ms): {e}")
+            else:
+                print(f"[Orchestrator] KB retrieval error (after {kb_time:.2f}s): {e}")
         kb_snippets = []  # Fallback to empty list on error
-
-    sentiment = float(analysis.get("sentiment", 0.0))
-    engagement = float(analysis.get("engagement", 0.0))
-    has_questions = bool(analysis.get("has_questions", False))
-    has_negative_signal = bool(analysis.get("has_negative_signal", False))
-    phase = analysis.get("phase", "building_rapport")
-    recommendation = analysis.get("recommendation", "Continue building rapport")
-    if Config.DEBUG:
-        print(
-            "[Orchestrator] Analyzer metrics -> "
-            f"phase={phase}, sentiment={sentiment}, engagement={engagement}, "
-            f"has_questions={has_questions}, negative_signal={has_negative_signal}"
-        )
-
-    readiness = evaluate_readiness(
-        sentiment=sentiment,
-        engagement=engagement,
-        has_questions=has_questions,
-        total_messages=len(conv.messages),
-    )
-
-    ready_for_ask = readiness["ready_for_ask"]
     
-    # Phase transition logic: if analyzer says "doing_the_ask" but not ready, stay in rapport
-    if phase == "doing_the_ask" and not ready_for_ask:
-        phase = "building_rapport"
-
-    # Also check if we should transition TO "doing_the_ask" if ready but still in rapport
-    # This helps guide the conversation progression
-    if phase == "building_rapport" and ready_for_ask:
-        # Check if we have enough engagement to suggest moving to selling
-        if engagement >= 0.5 and sentiment >= 0.3:
-            # Keep in rapport but signal readiness - let the LLM decide when to transition
-            pass
-    
-    # Get conversation state for guidance
+    # Get conversation state for guidance (minimal - only what's needed)
     conversation_state = {
         "message_count": len(conv.messages),
         "prospect_message_count": sum(1 for m in conv.messages if m.sender == "prospect"),
-        "has_questions": has_questions,
-        "engagement": engagement,
-        "sentiment": sentiment,
     }
     
     # Get guidance from static scripts
@@ -259,22 +277,23 @@ def run_pipeline(conv: Conversation) -> Dict[str, Any]:
         print("[Orchestrator] Guidance:", guidance.get("next_step"))
         print("[Orchestrator] Prompt blocks:", len(blocks))
         print("[Orchestrator] Ready for ask:", ready_for_ask)
+    
+    pipeline_time = time.time() - pipeline_start
+    if Config.DEBUG:
+        if pipeline_time < 1:
+            print(f"[Orchestrator] Total pipeline time: {pipeline_time*1000:.0f}ms")
+        else:
+            print(f"[Orchestrator] Total pipeline time: {pipeline_time:.2f}s")
 
     return {
         "phase": phase,
         "ready_for_ask": ready_for_ask,
-        "scores": {"sentiment": sentiment, "engagement": engagement},
-        "signals": {
-            "has_questions": has_questions,
-            "has_negative_signal": has_negative_signal,
-            "message_count": len(conv.messages),
-            "prospect_message_count": sum(1 for m in conv.messages if m.sender == "prospect"),
-        },
-        "criteria_met": readiness["criteria"],
-        "recommendation": recommendation,
+        "instruction_for_writer": instruction_for_writer,
+        "reasoning": reasoning,
+        "recommendation": instruction_for_writer,  # Use instruction as recommendation for backward compatibility
         "knowledge_context": kb_snippets,
         "next_message_suggestion": next_message,
-        "conversation_guidance": guidance,  # Add guidance for progression tracking
+        "conversation_guidance": guidance,
         "raw_llm": analysis,
         "timestamps": {},
     }

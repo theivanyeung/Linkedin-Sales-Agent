@@ -279,12 +279,17 @@ class AIService {
       // SECURITY NOTE: No DOM manipulation - just copies to clipboard
       // User will manually paste and click send in LinkedIn
       // This is completely undetectable by LinkedIn
-      await this.injectResponse(aiResult.response, tab.id);
-
-      // Return result with reminder
-      console.log(
-        "✅ Response copied to clipboard. Paste into LinkedIn message field and send manually."
-      );
+      // Silently handle clipboard errors - don't throw, just log
+      try {
+        await this.injectResponse(aiResult.response, tab.id);
+        console.log(
+          "✅ Response copied to clipboard. Paste into LinkedIn message field and send manually."
+        );
+      } catch (clipboardError) {
+        // Log clipboard error but don't throw - generation succeeded
+        console.error("⚠️ Failed to copy to clipboard (user can copy manually):", clipboardError);
+        console.log("Response generated successfully - user can copy manually");
+      }
 
       return aiResult;
     } catch (error) {

@@ -193,17 +193,32 @@ class DOMExtractor {
       // Update phase display
       this.updatePhaseDisplay(aiResult.phase);
 
-      // Copy to clipboard
+      // Copy to clipboard (silently handle errors - don't show in status)
       this.addConsoleLog("UI", "Copying response to clipboard", { threadId });
-      await this.aiService.injectResponse(aiResult.response, tab.id);
-      this.addConsoleLog("AI", "Generated from cloud - copied to clipboard", {
-        threadId,
-        phase: aiResult.phase,
-      });
+      try {
+        await this.aiService.injectResponse(aiResult.response, tab.id);
+        this.addConsoleLog("AI", "Generated from cloud - copied to clipboard", {
+          threadId,
+          phase: aiResult.phase,
+        });
+      } catch (clipboardError) {
+        // Log clipboard error to console only, don't affect status
+        this.addConsoleLog("ERROR", "Failed to copy to clipboard", { 
+          error: clipboardError.message,
+          response: aiResult.response.substring(0, 50) + "..."
+        });
+        console.error("Clipboard copy failed:", clipboardError);
+      }
       return aiResult;
     } catch (e) {
       console.error("GenerateFromCloud failed:", e);
-      this.setStatus("Error", e.message || "Failed generating from cloud");
+      // Only show errors in status if it's NOT a clipboard error
+      if (!e.message || !e.message.includes("clipboard")) {
+        this.setStatus("Error", e.message || "Failed generating from cloud");
+      } else {
+        // For clipboard errors, just show the response (user can copy manually)
+        this.setStatus("Suggested", aiResult?.response || "Response generated - copy manually");
+      }
       this.addConsoleLog("ERROR", "generateFromCloud failed", { error: e.message });
     }
   }
@@ -1040,8 +1055,15 @@ class DOMExtractor {
       const result = await this.aiService.generateAndInject(
         this.supabaseService
       );
-      this.setStatus("Ready", "Response copied to clipboard. Paste and send manually.");
-      if (btn) btn.textContent = "✅ Copied";
+      
+      // Show the response, not clipboard status
+      if (result && result.response) {
+        this.setStatus("Suggested", result.response);
+      } else {
+        this.setStatus("Ready", "Response generated. Copy manually if needed.");
+      }
+      
+      if (btn) btn.textContent = "✅ Generated";
       setTimeout(() => {
         if (btn) {
           btn.disabled = false;
@@ -1051,8 +1073,16 @@ class DOMExtractor {
       return result;
     } catch (e) {
       console.error("Generate response failed:", e);
-      this.setStatus("Error", e.message || "Failed to generate response");
-      if (btn) btn.textContent = "❌ Error";
+      // Only show errors in status if it's NOT a clipboard error
+      if (!e.message || !e.message.includes("clipboard")) {
+        this.setStatus("Error", e.message || "Failed to generate response");
+        if (btn) btn.textContent = "❌ Error";
+      } else {
+        // For clipboard errors, just show that generation succeeded
+        this.setStatus("Suggested", result?.response || "Response generated - copy manually");
+        if (btn) btn.textContent = "✅ Generated";
+      }
+      this.addConsoleLog("ERROR", "generateResponse failed", { error: e.message });
       setTimeout(() => {
         if (btn) {
           btn.disabled = false;
@@ -1097,14 +1127,23 @@ class DOMExtractor {
       // Update phase display
       this.updatePhaseDisplay(aiResult.phase);
       
-      // Copy to clipboard
+      // Copy to clipboard (silently handle errors - don't show in status)
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tab && tab.url && tab.url.includes("linkedin.com/messaging")) {
-        await this.aiService.injectResponse(aiResult.response, tab.id);
-        this.addConsoleLog("AI", "Auto-generated response copied to clipboard", {
-          threadId,
-          phase: aiResult.phase,
-        });
+        try {
+          await this.aiService.injectResponse(aiResult.response, tab.id);
+          this.addConsoleLog("AI", "Auto-generated response copied to clipboard", {
+            threadId,
+            phase: aiResult.phase,
+          });
+        } catch (clipboardError) {
+          // Log clipboard error to console only, don't affect status
+          this.addConsoleLog("ERROR", "Failed to copy to clipboard (auto-gen)", { 
+            error: clipboardError.message,
+            threadId
+          });
+          console.error("Clipboard copy failed (auto-gen):", clipboardError);
+        }
       }
       
       return aiResult;
@@ -1491,8 +1530,18 @@ class DOMExtractor {
       // Update phase display
       this.updatePhaseDisplay(aiResult.phase);
       
-      // Copy to clipboard instead of injecting
-      await this.aiService.injectResponse(aiResult.response, tab.id);
+      // Copy to clipboard (silently handle errors - don't show in status)
+      try {
+        await this.aiService.injectResponse(aiResult.response, tab.id);
+        this.addConsoleLog("AI", "Response copied to clipboard", { threadId });
+      } catch (clipboardError) {
+        // Log clipboard error to console only, don't affect status
+        this.addConsoleLog("ERROR", "Failed to copy to clipboard", { 
+          error: clipboardError.message,
+          threadId
+        });
+        console.error("Clipboard copy failed:", clipboardError);
+      }
   }
 
   // ===== Response History =====

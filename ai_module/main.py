@@ -46,9 +46,9 @@ def generate_response_endpoint():
     {
         "response": "Generated response text",
         "phase": "building_rapport" or "doing_the_ask",
-        "reasoning": "recommendation text",
-        "engagement_score": 0.7,
-        "sentiment_score": 0.5,
+        "reasoning": "strategic reasoning from GPT-5.1",
+        "engagement_score": 0.0,
+        "sentiment_score": 0.0,
         "ready_for_ask": false,
         "input": {...}
     }
@@ -87,19 +87,19 @@ def generate_response_endpoint():
         
         conv = build_conversation(thread_data, messages)
         
-        # Generate response using the orchestrator pipeline
-        response_text = generate_response(conv)
-        
-        # Run analysis for metadata
+        # Run analysis once - reuse for both response generation and metadata
         analysis = run_pipeline(conv)
+        
+        # Generate response using the orchestrator pipeline (pass analysis to avoid duplicate call)
+        response_text = generate_response(conv, analysis_result=analysis)
         
         # Build response in expected format
         result = {
             "response": response_text,
             "phase": analysis["phase"],
-            "reasoning": analysis["recommendation"],
-            "engagement_score": analysis["scores"]["engagement"],
-            "sentiment_score": analysis["scores"]["sentiment"],
+            "reasoning": analysis["reasoning"],  # Map reasoning directly
+            "engagement_score": 0.0,  # Hardcoded - no longer calculated
+            "sentiment_score": 0.0,  # Hardcoded - no longer calculated
             "ready_for_ask": analysis["ready_for_ask"],
             "input": {
                 "thread_id": thread_id,

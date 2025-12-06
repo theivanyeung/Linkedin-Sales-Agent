@@ -6,9 +6,9 @@ from typing import Dict, Any
 
 
 DEFAULTS = {
-    "engagement_threshold": 0.4,
-    "sentiment_threshold": 0.2,
-    "min_messages": 5,
+    "engagement_threshold": 0.4,  # Lowered from 0.6 to make it easier to transition
+    "sentiment_threshold": 0.2,    # Keep low - just need positive sentiment
+    "min_messages": 5,             # Need at least 5 messages for context
 }
 
 
@@ -26,7 +26,12 @@ def evaluate_readiness(
     sentiment_met = sentiment >= cfg["sentiment_threshold"]
     message_count_met = total_messages >= cfg["min_messages"]
 
-    ready_for_ask = engagement_met and sentiment_met and message_count_met and has_questions
+    # Ready if: engagement + sentiment + message count are met
+    # has_questions is a strong signal but not required (student can be ready without asking questions)
+    # If has_questions is True, we're definitely ready
+    # If has_questions is False but other criteria are strong, we can still be ready
+    base_ready = engagement_met and sentiment_met and message_count_met
+    ready_for_ask = base_ready and (has_questions or engagement >= 0.5 or sentiment >= 0.4)
 
     return {
         "ready_for_ask": ready_for_ask,

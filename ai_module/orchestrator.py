@@ -145,7 +145,7 @@ def _build_kb_query(conv: Conversation, phase: str) -> str:
     return query
 
 
-def run_pipeline(conv: Conversation) -> Dict[str, Any]:
+def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_change: bool = None) -> Dict[str, Any]:
     pipeline_start = time.time()
     
     # Handle empty conversations
@@ -208,15 +208,50 @@ def run_pipeline(conv: Conversation) -> Dict[str, Any]:
         )
         print(f"[Orchestrator] Reasoning: {reasoning[:200]}...")
         print(f"[Orchestrator] Instruction for writer: {instruction_for_writer}")
+        print(f"[Orchestrator] Permission Gate: current_phase={current_phase}, confirm_phase_change={confirm_phase_change}")
     
-    # Pure agentic decision: Trust GPT-5.1's move_forward boolean completely
-    # Phase is determined solely by move_forward decision
+    # PERMISSION GATE: Check if we need human approval before transitioning to selling phase
+    # Only ask for approval if the suggested phase is DIFFERENT from the current phase in Supabase
+    suggested_phase = "doing_the_ask" if move_forward else "building_rapport"
+    
     if move_forward:
-        phase = "doing_the_ask"
-        ready_for_ask = True
-        if Config.DEBUG:
-            print(f"[Orchestrator] Analyzer says move_forward=True -> phase='doing_the_ask'")
+        # Analyzer wants to move forward to selling phase
+        
+        # User explicitly rejected the transition
+        if confirm_phase_change is False:
+            if Config.DEBUG:
+                print("[Orchestrator] PERMISSION GATE: User rejected phase transition - forcing rapport phase")
+            # Override analyzer - force rapport phase
+            phase = "building_rapport"
+            ready_for_ask = False
+            # Update instruction to continue building rapport
+            instruction_for_writer = "Continue building rapport - ask about their interests, school, or current projects"
+        # Check if approval is needed: only if current_phase != suggested_phase (i.e., phase change needed)
+        elif current_phase and current_phase != suggested_phase and confirm_phase_change is not True:
+            # Need approval - return early with approval request
+            if Config.DEBUG:
+                print(f"[Orchestrator] PERMISSION GATE: Approval required for phase transition (current={current_phase}, suggested={suggested_phase})")
+            return {
+                "status": "approval_required",
+                "suggested_phase": "doing_the_ask",
+                "reasoning": reasoning,
+                "phase": current_phase,  # Stay in current phase until approved
+                "ready_for_ask": False,
+                "instruction_for_writer": "Waiting for approval to transition to selling phase",
+                "knowledge_context": [],
+                "next_message_suggestion": {"text": "", "cta": None, "variables": {}},
+                "conversation_guidance": {"next_step": "Approval required"},
+                "raw_llm": analysis,
+                "timestamps": {},
+            }
+        else:
+            # User approved (confirm_phase_change=True) or no gate needed (already in doing_the_ask or phases match)
+            phase = "doing_the_ask"
+            ready_for_ask = True
+            if Config.DEBUG:
+                print(f"[Orchestrator] PERMISSION GATE: Approved or no gate needed - phase='doing_the_ask' (current_phase={current_phase})")
     else:
+        # Analyzer says stay in rapport phase
         phase = "building_rapport"
         ready_for_ask = False
         if Config.DEBUG:

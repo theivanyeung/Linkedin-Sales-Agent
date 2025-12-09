@@ -74,6 +74,7 @@ class ResponsesClient:
     ) -> Dict[str, Any]:
         """Use Responses API for reasoning models, chat.completions for others."""
         # Reasoning models use Responses API
+        # Note: gpt-5-mini is a reasoning model and requires Responses API, so it must stay in this list
         reasoning_models = ["gpt-5", "gpt-5.1", "gpt-5-mini", "gpt-5-nano", "o1", "o1-preview", "o1-mini"]
         is_reasoning_model = self.model in reasoning_models
         
@@ -152,6 +153,15 @@ class ResponsesClient:
                 chat_kwargs["max_tokens"] = max_output_tokens
             elif Config.MAX_TOKENS:
                 chat_kwargs["max_tokens"] = Config.MAX_TOKENS
+            
+            # Pass reasoning_effort to chat_kwargs for models starting with gpt-5 or o
+            # Note: chat.completions API may not support this parameter, but included per user request
+            if reasoning_effort and (self.model.startswith(("gpt-5", "o"))):
+                # Validate reasoning_effort value
+                valid_efforts = ["none", "low", "medium", "high"]
+                effort_value = reasoning_effort.lower() if isinstance(reasoning_effort, str) else str(reasoning_effort).lower()
+                if effort_value in valid_efforts:
+                    chat_kwargs["reasoning_effort"] = effort_value
             
             resp = self.client.chat.completions.create(**chat_kwargs)
             text = resp.choices[0].message.content if resp.choices else "{}"

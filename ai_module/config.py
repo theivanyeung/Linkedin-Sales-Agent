@@ -15,7 +15,7 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
     TEMPERATURE = 0.7
-    MAX_TOKENS = 500
+    MAX_TOKENS = 250  # Safe upper limit for chat responses
     
     # Anthropic Configuration
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

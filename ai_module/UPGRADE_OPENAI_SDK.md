@@ -68,3 +68,6 @@ pip show openai
 Look for a version number. The Responses API was added in recent versions (around 1.40+).
 
 
+
+
+

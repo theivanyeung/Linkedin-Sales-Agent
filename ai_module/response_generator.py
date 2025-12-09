@@ -139,23 +139,24 @@ def generate_response(conv: Conversation, analysis_result: Optional[Dict[str, An
         else:
             print(f"[Generator] Prompt building completed: {prompt_build_time*1000:.2f}ms")
     
-    # Build strategic instruction section
-    strategic_instruction_section = ""
+    # Dynamic length instruction based on whether we have a strategic instruction
     if instruction_for_writer:
-        strategic_instruction_section = (
-            f"\n\n=== STRATEGIC INSTRUCTION ===\n"
-            f"Your strategist has given you this instruction: '{instruction_for_writer}'\n"
-            f"Write a short, casual reply that executes this move. This instruction takes priority - "
-            f"follow it while still being natural and conversational.\n"
+        length_instruction = (
+            "You have a STRATEGIC INSTRUCTION to execute. You are allowed to write up to 400-500 characters "
+            "to fully execute the Strategy (Pitch + Options + Question). Do not skip parts of the instruction just to be brief."
         )
-    # Note: If instruction_for_writer is missing, we rely on phase and guidelines only
+    else:
+        length_instruction = "Keep messages SHORT (aim for ~200 chars) - like a text message."
+    
+    # Note: Strategic instruction is now injected directly into the user message content
+    # This ensures Claude treats it as an immediate task rather than a background suggestion
     
     system_prompt = (
         "You are a sales agent for Prodicity, a selective fellowship helping high school students ship real outcomes "
         "(startups, research, internships, passion projects). Your goal is to build genuine rapport and guide students "
         "toward applying when they're ready.\n\n"
         "STYLE GUIDELINES:\n"
-        "- Keep messages SHORT (aim for ~200 chars) - like a text message\n"
+        f"- {length_instruction}\n"
         "- If the response needs to be longer to answer their question properly, that's okay\n"
         "- Casual, friendly tone - like talking to a friend, not a sales pitch\n"
         "- Be natural and understated - don't be overly enthusiastic or salesy\n"
@@ -167,10 +168,10 @@ def generate_response(conv: Conversation, analysis_result: Optional[Dict[str, An
         "3. If the conversation goes in an interesting direction, follow it - don't force the script\n"
         "4. The guidelines below are for general direction, but actual conversation flow is more important\n"
         "5. Don't copy scripts verbatim - adapt them to the context naturally\n"
-        "6. Build genuine rapport before selling - students can sense when you're just following a script\n\n"
+        "6. Build genuine rapport before selling - students can sense when you're just following a script\n"
+        "7. ANTI-WALL-OF-TEXT RULE: If you Pitch the product, DO NOT ask deep discovery questions in the same message. Pitching + CTA is enough. Keep it under 600 characters max.\n\n"
         f"Current phase: {phase}\n"
         f"{initial_message_context}"
-        f"{strategic_instruction_section}"
         f"{scripts_context}"
         f"{kb_context_text}"
     )
@@ -213,9 +214,19 @@ def generate_response(conv: Conversation, analysis_result: Optional[Dict[str, An
                 if result.get("ready_for_ask", False):
                     guidance_hint += " The lead is ready - you can share the application link if they show interest."
             
+            # Build final user content
+            user_content = last_msg.text + guidance_hint
+            
+            # INJECT STRATEGY HERE - This forces Claude to treat it as an immediate constraint
+            if instruction_for_writer:
+                user_content += (
+                    f"\n\n[[SYSTEM: STRATEGY ORDER: {instruction_for_writer}. "
+                    f"IGNORE standard brevity if needed to pitch, but MAX 650 chars.]]"
+                )
+            
             anthropic_messages.append({
                 "role": "user",
-                "content": last_msg.text + guidance_hint
+                "content": user_content
             })
         else:
             # This shouldn't happen since we checked above, but handle gracefully
@@ -246,12 +257,11 @@ def generate_response(conv: Conversation, analysis_result: Optional[Dict[str, An
     anthropic_client = Anthropic(api_key=Config.ANTHROPIC_API_KEY)
     
     try:
-        # Calculate max_tokens: Allow longer responses when needed
+        # Calculate max_tokens: Hard safety limit to prevent walls of text
         # Average English: ~4 chars per token
-        # Aim for ~200 chars (50 tokens) but allow up to ~500 chars (125 tokens) if needed
-        # Use 300 tokens to give plenty of headroom for complex questions (tuition/mentorship)
+        # 250 tokens ≈ 1000 chars - safe ceiling for all responses
         # Let the prompt control brevity, not the token limit
-        max_tokens_for_response = 300
+        max_tokens_for_response = 250
         
         # Time the Anthropic API call
         api_start = time.time()

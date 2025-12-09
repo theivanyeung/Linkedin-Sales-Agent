@@ -17,7 +17,14 @@ from static_scripts import PHASE_LIBRARY, get_phase_config
 import traceback
 
 app = Flask(__name__)
-CORS(app)  # Allow Chrome extension to make requests
+# Allow Chrome extension to make requests - enable CORS for all routes
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Accept"]
+    }
+})
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -40,6 +47,8 @@ def generate_response_endpoint():
                 "timestamp": "..."
             }
         ],
+        "current_phase": "building_rapport" (optional),
+        "confirm_phase_change": true/false (optional)
     }
     
     Returns:
@@ -70,6 +79,8 @@ def generate_response_endpoint():
         thread_id = data.get("thread_id", "unknown")
         prospect_name = data.get("prospect_name", "Unknown")
         messages = data.get("messages", [])
+        current_phase = data.get("current_phase")  # Optional: current phase from Supabase
+        confirm_phase_change = data.get("confirm_phase_change")  # Optional: user approval flag
         
         # Validate messages
         if not isinstance(messages, list):
@@ -88,7 +99,25 @@ def generate_response_endpoint():
         conv = build_conversation(thread_data, messages)
         
         # Run analysis once - reuse for both response generation and metadata
-        analysis = run_pipeline(conv)
+        # Pass permission gate parameters
+        analysis = run_pipeline(conv, current_phase=current_phase, confirm_phase_change=confirm_phase_change)
+        
+        # Check if approval is required
+        if analysis.get("status") == "approval_required":
+            # Return 202 Accepted with approval request
+            return jsonify({
+                "status": "approval_required",
+                "suggested_phase": analysis.get("suggested_phase"),
+                "reasoning": analysis.get("reasoning"),
+                "message": "AI wants to transition to selling phase. Approval required.",
+                "input": {
+                    "thread_id": thread_id,
+                    "prospect_name": prospect_name,
+                    "title": data.get("title", ""),
+                    "description": data.get("description", ""),
+                    "message_count": len(messages),
+                }
+            }), 202
         
         # Generate response using the orchestrator pipeline (pass analysis to avoid duplicate call)
         response_text = generate_response(conv, analysis_result=analysis)

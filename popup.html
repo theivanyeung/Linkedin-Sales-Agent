@@ -430,8 +430,16 @@
       <div class="status-details" id="statusDetails">
         Click to extract current page DOM
       </div>
-      <div class="status-details" id="statusPhase" style="margin-top: 8px; padding: 6px 10px; background: rgba(59, 130, 246, 0.1); border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.3); display: none;">
-        <strong style="color: #8ab4ff;">Phase:</strong> <span id="phaseValue">—</span>
+      <div class="status-details" id="statusPhase" style="margin-top: 8px; padding: 8px 10px; background: rgba(59, 130, 246, 0.1); border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.3); display: none;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+          <div>
+            <strong style="color: #8ab4ff;">Phase:</strong> <span id="phaseValue">—</span>
+          </div>
+          <select id="phaseSelect" class="compact" style="flex: 1; min-width: 120px; max-width: 150px; font-size: 11px; padding: 4px 6px; height: 26px;">
+            <option value="building_rapport">Building Rapport</option>
+            <option value="doing_the_ask">Selling Phase</option>
+          </select>
+        </div>
       </div>
     </div>
 

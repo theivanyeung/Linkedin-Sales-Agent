@@ -204,6 +204,8 @@ class SupabaseService {
           updated_at: new Date().toISOString(),
           // Preserve existing status if not explicitly provided
           status: conversationData.status !== undefined ? conversationData.status : existing.status || 'unknown',
+          // Preserve existing phase if not explicitly provided, default to 'building_rapport'
+          phase: conversationData.phase !== undefined ? conversationData.phase : (existing.phase || 'building_rapport'),
           // Store placeholders from message ONLY - overwrite any existing (don't merge)
           placeholders: placeholdersToSave,
         };
@@ -290,6 +292,8 @@ class SupabaseService {
           message_count: withIndex.length,
           updated_at: new Date().toISOString(),
           status: conversationData.status || 'unknown',
+          // Default phase to 'building_rapport' for new conversations
+          phase: conversationData.phase || 'building_rapport',
           // Store placeholders as JSONB map - use only from conversationData (extracted from message)
           placeholders: conversationData.placeholders || {},
         };

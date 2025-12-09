@@ -51,6 +51,15 @@ def analyze_conversation(conv: Conversation) -> Dict[str, Any]:
         "- Consider the context: where are we in the relationship? What signals are they sending?\n"
         "- Make a clear strategic decision: should we advance the sale or stay put?\n"
         "- Provide a specific, actionable instruction for the copywriter to execute.\n\n"
+        "CRITICAL RULE: ONE GOAL PER TURN\n"
+        "- Do NOT instruct the writer to \"Ask Discovery Questions\" AND \"Pitch Prodicity\" in the same message.\n"
+        "- IF the user invites the pitch (e.g., \"let me know if you can help\"), SKIP the discovery questions and go straight to the Pitch + CTA.\n"
+        "- IF you need more information before pitching, ASK the questions only. Do not pitch yet.\n"
+        "- A message should never exceed 2 distinct paragraphs.\n\n"
+        "CRITICAL RULE FOR PITCHING:\n"
+        "- If you decide to PITCH (Phase: doing_the_ask), do NOT instruct the writer to ask \"discovery questions\" (e.g., \"What is your biggest challenge?\") in the same message.\n"
+        "- The Pitch + The CTA is enough. Adding questions makes the message too long.\n"
+        "- Your instruction should be: \"Validate their project, then immediately pivot to the Pitch. Do not ask discovery questions.\"\n\n"
         "Phase Guidelines:\n"
         "- 'building_rapport': Early stage, building relationship, asking questions, not selling yet\n"
         "- 'doing_the_ask': Ready to introduce Prodicity, student is engaged and asking questions\n\n"
@@ -68,10 +77,21 @@ def analyze_conversation(conv: Conversation) -> Dict[str, Any]:
         "   - Signals: \"I don't have a project yet\", \"I'm just a beginner\", \"Is this for experienced people?\", \"I don't know what to build\".\n"
         "   - Analysis: They feel unqualified.\n"
         "   - TACTIC: \"Reassure them immediately. Explain that Prodicity is specifically designed to help them FIND and START their project. They don't need to be an expert yet.\"\n\n"
+        "GATEKEEPING RULES (WHEN TO SELL):\n\n"
+        "You generally CANNOT set `move_forward=True` (Selling Phase) until you have uncovered the following \"Three Layers of Rapport\":\n\n"
+        "1. The Project: What are they working on? (You usually have this).\n\n"
+        "2. The Pain/Motivation: Why are they doing it? What is hard? (e.g., burnout, lack of direction, technical hurdles).\n\n"
+        "3. The Vision: Where do they want to take it? (e.g., non-profit, research paper, startup).\n\n"
+        "LOGIC FLOW:\n\n"
+        "- IF you know the Project but NOT the Pain/Motivation -> `move_forward=False`. Instruction: \"Ask the Pain Probe (e.g., is it hard balancing with APs?)\"\n\n"
+        "- IF you know the Pain but NOT the Vision -> `move_forward=False`. Instruction: \"Ask the Vision Probe (e.g., where do you see this going?)\"\n\n"
+        "- ONLY IF you have a clear picture of their Project + Pain/Motivation + Vision -> `move_forward=True` (Pitch Prodicity).\n\n"
+        "EXCEPTION:\n\n"
+        "- If the student EXPLICITLY asks for help/mentorship/advising (e.g., \"Can you help me?\"), you can skip the checklist and `move_forward=True`.\n\n"
         "Required Output Fields:\n"
         "- reasoning: Your internal monologue explaining WHY the student said what they said. What are their underlying motivations, concerns, or interests? What signals are they sending about their readiness?\n"
         "- move_forward: Boolean decision - True if we should advance the sale (introduce Prodicity), False if we should continue building rapport. Base this on your strategic assessment of the student's readiness, not on rigid rules.\n"
-        "- instruction_for_writer: A direct, actionable command for the copywriter. CRITICAL: If a Silent Objection is detected, the instruction MUST address it immediately using the corresponding TACTIC above, overriding standard rapport questions. Examples:\n"
+        "- instruction_for_writer: A direct, actionable command for the copywriter. CRITICAL: If a Silent Objection is detected, the instruction MUST address it immediately using the corresponding TACTIC above, overriding standard rapport questions. CONSTRAINT: If you instruct the writer to PITCH, do NOT instruct them to ask discovery questions in the same message. Pitch + CTA is enough. Examples:\n"
         "  * 'Acknowledge the price concern, but deflect by asking about their specific project interest first.'\n"
         "  * 'They're showing interest - introduce Prodicity naturally by connecting it to their mentioned project.'\n"
         "  * 'Continue building rapport - ask about their school or current projects to deepen the relationship.'\n"
@@ -128,7 +148,7 @@ def analyze_conversation(conv: Conversation) -> Dict[str, Any]:
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         json_schema=ANALYSIS_SCHEMA,
-        reasoning_effort="medium",
+        reasoning_effort="low",
     )
     
     api_time = time.time() - api_start

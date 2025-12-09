@@ -139,10 +139,20 @@
           if (!text) return; // Skip empty messages
 
           // Determine sender (you vs them)
-          const isFromYou =
+          // LinkedIn marks inbound messages with --other class
+          const isOther = messageEl.classList.contains("msg-s-event-listitem--other");
+          const outboundFlags =
             messageEl.classList.contains("msg-s-event-listitem--outbound") ||
             messageEl.classList.contains("msg-s-event-listitem--self") ||
             !!messageEl.querySelector(".msg-s-event-listitem__profile-picture--me, .msg-s-message-group--own");
+          
+          // Fallback: Check if message matches initial message template pattern (definitely from you)
+          const matchesInitialTemplate = text.toLowerCase().includes("i'm currently researching what students at") ||
+            text.toLowerCase().includes("are you working on any great projects");
+          
+          // If it's marked as "other", it's from prospect. Otherwise, if it has outbound flags OR it's not marked as "other", it's from you.
+          // Also, if it matches the initial template, it's definitely from you.
+          const isFromYou = outboundFlags || !isOther || matchesInitialTemplate;
 
           // Get timestamp
           const timeEl = messageEl.querySelector(".msg-s-message-list__time-heading");
@@ -243,10 +253,15 @@
           // Extract mentions
           const mentions = extractMentions(text);
 
+          const sender = isFromYou ? "you" : "prospect";
+          
+          // Note: Console logging removed for stealth (LinkedIn could monitor console)
+          // Debug logging can be re-enabled for troubleshooting if needed
+          
           messages.push({
             index: index,
             text: text,
-            sender: isFromYou ? "you" : "prospect",
+            sender: sender,
             attachments: attachments,
             reactions: reactions,
             mentions: mentions,

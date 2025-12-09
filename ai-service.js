@@ -28,11 +28,37 @@ class AIService {
    * Check if AI service is available
    */
   async checkHealth() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    
     try {
-      const response = await fetch(`${this.baseUrl}/health`);
-      return response.ok;
+      const response = await fetch(`${this.baseUrl}/health`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        console.error(`Health check failed with status: ${response.status}`);
+        return false;
+      }
+      
+      const data = await response.json();
+      console.log("Health check successful:", data);
+      return true;
     } catch (error) {
-      console.error("AI service health check failed:", error);
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        console.error("AI service health check timed out after 5 seconds");
+      } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        console.error("AI service health check failed: Could not connect to server. Make sure Flask is running on", this.baseUrl);
+      } else {
+        console.error("AI service health check failed:", error);
+      }
       return false;
     }
   }
@@ -64,6 +90,10 @@ class AIService {
         description: conversationData.description || "",
         messages: messages,
         app_link: "", // Can be added later if available
+        // Send current phase from Supabase for permission gate
+        current_phase: conversationData.phase || "building_rapport",
+        // confirm_phase_change will be set by the caller if user approves/rejects
+        confirm_phase_change: conversationData.confirm_phase_change,
       };
 
       console.log("Calling AI service with payload:", payload);
@@ -83,6 +113,12 @@ class AIService {
 
       const result = await response.json();
       console.log("AI service response:", result);
+
+      // Check if approval is required
+      if (result.status === "approval_required") {
+        // Return the approval request - caller will handle UI
+        return result;
+      }
 
       return result;
     } catch (error) {
@@ -200,15 +236,41 @@ class AIService {
    * Get all available scripts organized by phase.
    */
   async getScriptsList() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
     try {
-      const response = await fetch(`${this.baseUrl}/scripts/list`);
+      const response = await fetch(`${this.baseUrl}/scripts/list`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
       if (!response.ok) {
-        throw new Error(`Failed to fetch scripts: ${response.status}`);
+        const errorText = await response.text();
+        console.error(`Failed to fetch scripts: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to fetch scripts: ${response.status} ${errorText}`);
       }
-      return await response.json();
+      
+      const data = await response.json();
+      console.log("Successfully loaded scripts:", Object.keys(data.phases || {}).length, "phases");
+      return data;
     } catch (error) {
-      console.error("Error fetching scripts list:", error);
-      throw error;
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        console.error("Scripts list request timed out");
+        throw new Error("Request timed out. Is the Flask server running?");
+      } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        console.error("Could not connect to Flask server at", this.baseUrl);
+        throw new Error(`Could not connect to Flask server at ${this.baseUrl}. Make sure to run: cd ai_module && python main.py`);
+      } else {
+        console.error("Error fetching scripts list:", error);
+        throw error;
+      }
     }
   }
 

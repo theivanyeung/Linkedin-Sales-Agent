@@ -95,9 +95,9 @@ PHASE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "application": {
                 "description": "How to follow up when the lead shows interest.",
                 "script": (
-                    "Sure, apply here: https://app.prodicity.org/application\n\n"
-                    "Spots are limited, so if applying, aim to get it submitted by Nov 23rd, "
-                    "for interviews as we're finalizing applications"
+                    "Sure, apply here: https://www.prodicity.org\n"
+                    "Spots are limited, so if applying, aim to get it submitted by Dec 19th. "
+                    "for interviews as we're finalizing applications\n"
                 ),
                 "cta_templates": [
                     "If that sounds like a fit, I can share the application link. Let me know",
@@ -280,27 +280,27 @@ def get_prompt_blocks(phase: str) -> List[str]:
         # Probes for students WITH initiative (working on projects/ideas)
         probes = sections.get("engaging_with_lead", {}).get("probes", {})
         if probes:
-            blocks.append("Example question types (adapt to conversation, don't copy verbatim):")
+            blocks.append("Available Question Probes (if they're working on projects/ideas):")
             for idx, (key, value) in enumerate(probes.items(), 1):
                 label = key.replace("_", " ").title()
-                blocks.append(f"{idx}. {label} (example): {value}")
-            blocks.append("Note: Use these as inspiration for the TYPE of question to ask, but rephrase naturally based on what they shared.")
+                blocks.append(f"{idx}. {label}: {value}")
+            blocks.append("")
 
         # Probes for students WITHOUT initiative (not working on anything yet)
         no_initiative_probes = sections.get("no_initiative", {}).get("probes", {})
         if no_initiative_probes:
-            blocks.append("Example question types for students not working on anything (adapt to conversation):")
+            blocks.append("Available Question Probes (if they're NOT working on anything):")
             for idx, (key, value) in enumerate(no_initiative_probes.items(), 1):
                 label = key.replace("_", " ").title()
-                blocks.append(f"{idx}. {label} (example): {value}")
-            blocks.append("Note: Adapt these to the conversation - don't copy them exactly.")
+                blocks.append(f"{idx}. {label}: {value}")
+            blocks.append("")
 
         context_text = get_rapport_context()
         if context_text:
             blocks.extend(
                 [
-                    "Context you can reference when relevant (rephrase naturally):",
-                    f"Example: {context_text}",
+                    "Context to share when relevant:",
+                    context_text,
                     "",
                 ]
             )
@@ -308,38 +308,28 @@ def get_prompt_blocks(phase: str) -> List[str]:
     elif phase == "doing_the_ask":
         intro_variants = get_prodicity_introduction_variants()
         if intro_variants:
-            blocks.append("Example introduction approaches (adapt to conversation, don't copy verbatim):")
+            blocks.append("Introduction Approaches:")
             for idx, intro in enumerate(intro_variants, 1):
-                blocks.append(f"{idx}. Example approach: {intro}")
-            blocks.append("Note: Use these as inspiration for HOW to introduce Prodicity, but adapt the wording to fit naturally into the conversation.")
+                blocks.append(f"{idx}. {intro}")
+                blocks.append("")
 
         app_info = get_application_info()
         if app_info:
-            blocks.extend([
-                "Application information (share when they ask or show interest):",
-                f"Example: {app_info}",
-                "Note: Adapt the wording to be natural and conversational.",
-                ""
-            ])
+            blocks.extend(["When lead shows interest:", app_info, ""])
 
         social_proof = get_prodicity_examples()
         if social_proof:
-            blocks.extend([
-                "Supporting examples (reference if relevant to what they're working on):",
-                f"Examples: {social_proof}",
-                "Note: Only share examples that are relevant to their interests/projects.",
-                ""
-            ])
+            blocks.extend(["Supporting Examples:", social_proof, ""])
 
         call_script = get_call_scheduling()
         price_script = get_pricing_info()
         additional_lines: List[str] = []
         if call_script:
-            additional_lines.append("- If appropriate, you can offer a call (adapt wording): " + call_script)
+            additional_lines.append("- If appropriate, offer to schedule a call: " + call_script)
         if price_script:
-            additional_lines.append("- If they ask about pricing, share this info (rephrase naturally): " + price_script)
+            additional_lines.append("- If they ask about pricing: " + price_script)
         if additional_lines:
-            blocks.extend(["Additional options (adapt to conversation):", *additional_lines, ""])
+            blocks.extend(["Additional Options:", *additional_lines, ""])
 
     guidelines = config.get("guidelines", [])
     if guidelines:
@@ -398,8 +388,6 @@ def get_conversation_guidance(
             }
         )
 
-        # Note: Legacy heuristic check - phase is now determined by GPT-5.1's move_forward decision
-        # This check will rarely trigger since has_questions is no longer provided
         if conversation_state:
             messages_count = conversation_state.get("message_count", 0)
             prospect_messages = conversation_state.get("prospect_message_count", 0)
@@ -409,7 +397,7 @@ def get_conversation_guidance(
                 guidance["ready_to_introduce_prodicity"] = True
                 guidance[
                     "next_step"
-                ] = "Consider introducing Prodicity when ready"
+                ] = "Consider introducing Prodicity if sentiment is positive"
 
     elif phase == "doing_the_ask":
         introduction_variants = get_prodicity_introduction_variants()
@@ -430,17 +418,16 @@ def get_phase_specific_context(phase: str) -> str:
     """Get a concise context string for the current phase to include in prompts."""
     if phase == "building_rapport":
         return (
-            "You are in the BUILDING RAPPORT phase. Your goal is to engage the lead naturally and build genuine connection. "
-            "Ask thoughtful questions about their projects/ideas OR their interests if they're not working on anything yet. "
-            "The question examples below are GUIDELINES - adapt them to the actual conversation. If they ask you something, "
-            "answer it directly. If the conversation takes an interesting turn, follow it. Keep messages short, conversational, "
-            "and show genuine interest. Don't force the script - prioritize natural conversation flow."
+            "You are in the BUILDING RAPPORT phase. Your goal is to engage the lead, "
+            "ask thoughtful questions about their projects/ideas OR their interests if they're not working on anything yet, "
+            "understand their motivation, pain points, and vision. Use the appropriate question probes based on their situation. "
+            "Keep messages short, conversational, and show genuine interest."
         )
     if phase == "doing_the_ask":
         return (
-            "You are in the SELLING/DOING THE ASK phase. Your goal is to introduce Prodicity naturally when it fits the conversation. "
-            "The introduction examples below are GUIDELINES - adapt them to what they've actually shared. Reference specific things "
-            "they've told you. Don't force the introduction - wait for a natural opening. When they show interest or ask about it, "
-            "provide the application link and deadline information. Always respond to their questions first before moving forward."
+            "You are in the SELLING/DOING THE ASK phase. Your goal is to introduce Prodicity "
+            "in a way that's relevant to what they've shared, highlight the fit, and guide them "
+            "toward the application. Reference specific things they've told you. When they show "
+            "interest, provide the application link and deadline information."
         )
-    return f"You are in the {phase} phase. Adapt to the conversation naturally - don't follow scripts verbatim."
+    return f"You are in the {phase} phase."

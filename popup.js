@@ -77,6 +77,12 @@ class DOMExtractor {
       statusSelect.addEventListener("change", () => this.updateLeadStatus());
     }
     
+    // Phase selector - manual phase change
+    const phaseSelect = document.getElementById("phaseSelect");
+    if (phaseSelect) {
+      phaseSelect.addEventListener("change", () => this.handlePhaseChange());
+    }
+    
     const updatePlaceholdersBtn = document.getElementById("updatePlaceholdersBtn");
     if (updatePlaceholdersBtn) {
       updatePlaceholdersBtn.addEventListener("click", () => this.updatePlaceholders());
@@ -176,10 +182,48 @@ class DOMExtractor {
         phase: convo.phase,
         messageCount: convo.messages.length,
       });
-      const aiResult = await this.aiService.generateResponse(
+      let aiResult = await this.aiService.generateResponse(
         convo,
         convo.prospectName || convo.title || ""
       );
+      
+      // Handle approval required
+      if (aiResult.status === "approval_required") {
+        this.setStatus("Waiting", "Approval required for phase transition...");
+        const approved = await this.showPhaseApprovalDialog(
+          aiResult.reasoning,
+          aiResult.suggested_phase
+        );
+        
+        // Update phase in Supabase based on decision
+        if (approved) {
+          await this.updatePhaseInSupabase(threadId, "doing_the_ask");
+          // Re-call with approval
+          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          convoUpdated.confirm_phase_change = true;
+          aiResult = await this.aiService.generateResponse(
+            convoUpdated,
+            convoUpdated.prospectName || convoUpdated.title || ""
+          );
+        } else {
+          await this.updatePhaseInSupabase(threadId, "building_rapport");
+          // Re-call with rejection
+          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          convoUpdated.confirm_phase_change = false;
+          aiResult = await this.aiService.generateResponse(
+            convoUpdated,
+            convoUpdated.prospectName || convoUpdated.title || ""
+          );
+        }
+      }
+      
+      // Only proceed if we have a valid response
+      if (!aiResult || !aiResult.response) {
+        this.addConsoleLog("AI", "No response generated", { threadId });
+        this.setStatus("Ready", "No response generated");
+        return;
+      }
+      
       this.addConsoleLog("AI", "Received /generate result", {
         phase: aiResult.phase,
         readyForAsk: aiResult.ready_for_ask,
@@ -192,6 +236,11 @@ class DOMExtractor {
       
       // Update phase display
       this.updatePhaseDisplay(aiResult.phase);
+      
+      // Update phase in Supabase if it changed
+      if (aiResult.phase && convo.phase !== aiResult.phase) {
+        await this.updatePhaseInSupabase(threadId, aiResult.phase);
+      }
 
       // Copy to clipboard (silently handle errors - don't show in status)
       this.addConsoleLog("UI", "Copying response to clipboard", { threadId });
@@ -205,7 +254,7 @@ class DOMExtractor {
         // Log clipboard error to console only, don't affect status
         this.addConsoleLog("ERROR", "Failed to copy to clipboard", { 
           error: clipboardError.message,
-          response: aiResult.response.substring(0, 50) + "..."
+          response: aiResult?.response ? aiResult.response.substring(0, 50) + "..." : "No response"
         });
         console.error("Clipboard copy failed:", clipboardError);
       }
@@ -306,6 +355,59 @@ class DOMExtractor {
       } else {
         placeholdersToggleText.textContent = "Placeholders";
         placeholdersToggleText.title = "Click to edit placeholder values";
+      }
+    }
+  }
+
+  /**
+   * Handle manual phase change from dropdown
+   */
+  async handlePhaseChange() {
+    const phaseSelect = document.getElementById("phaseSelect");
+    if (!phaseSelect) return;
+    
+    const newPhase = phaseSelect.value;
+    if (!newPhase) return;
+    
+    const threadId = await this.getActiveThreadId();
+    if (!threadId) {
+      this.addConsoleLog("ERROR", "Not on a LinkedIn conversation thread", {});
+      // Revert select
+      const convo = await this.supabaseService.getConversation(threadId);
+      if (convo && convo.phase) {
+        phaseSelect.value = convo.phase;
+      }
+      return;
+    }
+    
+    try {
+      this.setStatus("Saving", "Updating phase...");
+      await this.updatePhaseInSupabase(threadId, newPhase);
+      
+      // Update display
+      this.updatePhaseDisplay(newPhase);
+      
+      this.setStatus("Success", `Phase updated to ${newPhase === "doing_the_ask" ? "Selling Phase" : "Building Rapport"}`);
+      this.addConsoleLog("DB", "Phase manually changed", {
+        threadId,
+        newPhase,
+      });
+      
+      setTimeout(() => {
+        this.setStatus("Ready", "Phase updated");
+      }, 2000);
+    } catch (error) {
+      console.error("Error updating phase:", error);
+      this.setStatus("Error", `Failed to update phase: ${error.message}`);
+      this.addConsoleLog("ERROR", "Failed to update phase", {
+        threadId,
+        error: error.message,
+      });
+      
+      // Revert select to previous value
+      const convo = await this.supabaseService.getConversation(threadId);
+      if (convo && convo.phase) {
+        phaseSelect.value = convo.phase;
       }
     }
   }
@@ -430,16 +532,142 @@ class DOMExtractor {
   updatePhaseDisplay(phase) {
     const phaseEl = document.getElementById("statusPhase");
     const phaseValueEl = document.getElementById("phaseValue");
+    const phaseSelect = document.getElementById("phaseSelect");
     if (!phaseEl || !phaseValueEl) return;
-    
+
     if (phase) {
       const phaseText = phase === "doing_the_ask" ? "Selling Phase" : "Building Rapport";
       const phaseColor = phase === "doing_the_ask" ? "#f39c12" : "#8ab4ff";
       phaseValueEl.textContent = phaseText;
       phaseValueEl.style.color = phaseColor;
       phaseEl.style.display = "block";
+      
+      // Update select dropdown
+      if (phaseSelect) {
+        phaseSelect.value = phase;
+      }
     } else {
       phaseEl.style.display = "none";
+    }
+  }
+
+  /**
+   * Show approval dialog for phase transition
+   * Returns a promise that resolves to true if approved, false if rejected
+   */
+  async showPhaseApprovalDialog(reasoning, suggestedPhase) {
+    return new Promise((resolve) => {
+      // Create modal overlay
+      const overlay = document.createElement("div");
+      overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.75);
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        backdrop-filter: blur(4px);
+      `;
+
+      // Create modal dialog - matching UI theme
+      const dialog = document.createElement("div");
+      dialog.style.cssText = `
+        background: #0f1624;
+        border: 1px solid #26344a;
+        border-radius: 12px;
+        padding: 20px;
+        max-width: 500px;
+        width: 90%;
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+        color: #e6edf3;
+      `;
+
+      dialog.innerHTML = `
+        <div style="margin-bottom: 16px;">
+          <div style="font-size: 18px; font-weight: 600; color: #e6edf3; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">⚠️</span>
+            <span>Phase Transition Approval</span>
+          </div>
+          <div style="font-size: 13px; color: #9aa7b2; margin-top: 4px;">
+            The AI wants to transition from <strong style="color: #8ab4ff;">Building Rapport</strong> to <strong style="color: #f39c12;">Selling Phase</strong>.
+          </div>
+        </div>
+        <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 12px; margin: 12px 0; font-size: 13px; color: #c9d1d9; line-height: 1.5;">
+          <div style="font-weight: 600; color: #8ab4ff; margin-bottom: 6px;">Reasoning:</div>
+          <div>${reasoning || "No reasoning provided"}</div>
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 20px;">
+          <button id="approveBtn" class="btn btn-primary" style="flex: 1; padding: 10px 16px; font-size: 14px; font-weight: 600;">
+            ✅ Approve & Generate Pitch
+          </button>
+          <button id="rejectBtn" class="btn btn-outline-secondary" style="flex: 1; padding: 10px 16px; font-size: 14px; font-weight: 600;">
+            ❌ Reject & Continue Rapport
+          </button>
+        </div>
+      `;
+
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      // Handle approve
+      document.getElementById("approveBtn").onclick = () => {
+        document.body.removeChild(overlay);
+        resolve(true);
+      };
+
+      // Handle reject
+      document.getElementById("rejectBtn").onclick = () => {
+        document.body.removeChild(overlay);
+        resolve(false);
+      };
+
+      // Close on overlay click (outside dialog)
+      overlay.onclick = (e) => {
+        if (e.target === overlay) {
+          document.body.removeChild(overlay);
+          resolve(false); // Default to reject if closed
+        }
+      };
+    });
+  }
+
+  /**
+   * Update phase in Supabase
+   */
+  async updatePhaseInSupabase(threadId, newPhase) {
+    try {
+      const convo = await this.supabaseService.getConversation(threadId);
+      if (!convo) {
+        console.error("Cannot update phase - conversation not found");
+        return;
+      }
+
+      // Update phase in Supabase
+      await this.supabaseService.saveConversation({
+        threadId: threadId,
+        phase: newPhase,
+        // Preserve other fields
+        title: convo.title,
+        description: convo.description,
+        messages: convo.messages,
+        status: convo.status,
+        placeholders: convo.placeholders,
+      });
+
+      this.addConsoleLog("DB", "Phase updated in Supabase", {
+        threadId,
+        newPhase,
+      });
+    } catch (error) {
+      console.error("Error updating phase in Supabase:", error);
+      this.addConsoleLog("ERROR", "Failed to update phase", {
+        threadId,
+        error: error.message,
+      });
     }
   }
 
@@ -1052,13 +1280,73 @@ class DOMExtractor {
         btn.textContent = "Generating...";
       }
       this.setStatus("Thinking", "Generating suggested reply...");
-      const result = await this.aiService.generateAndInject(
-        this.supabaseService
+      
+      // Get thread ID for phase updates
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      const threadId = tab?.url?.match(/\/thread\/([^\/\?]+)/)?.[1];
+      
+      // Get conversation to pass phase
+      const convo = await this.supabaseService.getConversation(threadId);
+      if (!convo) {
+        throw new Error("No conversation found. Please save the conversation first.");
+      }
+      
+      // First call - check for approval
+      let aiResult = await this.aiService.generateResponse(
+        convo,
+        convo.prospectName || convo.title || ""
       );
       
+      // Handle approval required
+      if (aiResult.status === "approval_required") {
+        this.setStatus("Waiting", "Approval required for phase transition...");
+        const approved = await this.showPhaseApprovalDialog(
+          aiResult.reasoning,
+          aiResult.suggested_phase
+        );
+        
+        // Update phase in Supabase based on decision
+        if (approved) {
+          await this.updatePhaseInSupabase(threadId, "doing_the_ask");
+          // Re-call with approval
+          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          convoUpdated.confirm_phase_change = true;
+          aiResult = await this.aiService.generateResponse(
+            convoUpdated,
+            convoUpdated.prospectName || convoUpdated.title || ""
+          );
+        } else {
+          await this.updatePhaseInSupabase(threadId, "building_rapport");
+          // Re-call with rejection
+          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          convoUpdated.confirm_phase_change = false;
+          aiResult = await this.aiService.generateResponse(
+            convoUpdated,
+            convoUpdated.prospectName || convoUpdated.title || ""
+          );
+        }
+      }
+      
+      // Inject response if we have one
+      if (aiResult && aiResult.response) {
+        await this.aiService.generateAndInject(this.supabaseService);
+      }
+      
+      // Update phase in Supabase if it changed
+      if (aiResult && aiResult.phase && threadId) {
+        const currentConvo = await this.supabaseService.getConversation(threadId);
+        if (currentConvo && currentConvo.phase !== aiResult.phase) {
+          await this.updatePhaseInSupabase(threadId, aiResult.phase);
+        }
+      }
+      
       // Show the response, not clipboard status
-      if (result && result.response) {
-        this.setStatus("Suggested", result.response);
+      if (aiResult && aiResult.response) {
+        this.setStatus("Suggested", aiResult.response);
+        this.updatePhaseDisplay(aiResult.phase);
       } else {
         this.setStatus("Ready", "Response generated. Copy manually if needed.");
       }
@@ -1070,7 +1358,7 @@ class DOMExtractor {
           btn.textContent = original || "Generate Response";
         }
       }, 2000);
-      return result;
+      return aiResult;
     } catch (e) {
       console.error("Generate response failed:", e);
       // Only show errors in status if it's NOT a clipboard error
@@ -1079,7 +1367,7 @@ class DOMExtractor {
         if (btn) btn.textContent = "❌ Error";
       } else {
         // For clipboard errors, just show that generation succeeded
-        this.setStatus("Suggested", result?.response || "Response generated - copy manually");
+        this.setStatus("Suggested", "Response generated - copy manually");
         if (btn) btn.textContent = "✅ Generated";
       }
       this.addConsoleLog("ERROR", "generateResponse failed", { error: e.message });
@@ -1108,17 +1396,72 @@ class DOMExtractor {
         return;
       }
       
+      // Check if last message was sent by "you" - if so, skip auto-generation (wait for prospect response)
+      const messages = conversationData.messages || [];
+      if (messages.length > 0) {
+        const lastMessage = messages[messages.length - 1];
+        const lastSender = lastMessage.sender || (lastMessage.isFromYou ? "you" : "prospect");
+        if (lastSender === "you") {
+          this.addConsoleLog("AI", "Skipping auto-gen - last message was sent by you, waiting for prospect response", { 
+            threadId,
+            lastMessageIndex: messages.length - 1
+          });
+          return;
+        }
+      }
+      
       // Generate response using AI service
-      const aiResult = await this.aiService.generateResponse(
+      let aiResult = await this.aiService.generateResponse(
         conversationData,
         conversationData.prospectName || conversationData.title || ""
       );
+      
+      // Handle approval required - show dialog even for auto-generate
+      if (aiResult.status === "approval_required") {
+        this.setStatus("Waiting", "Approval required for phase transition...");
+        const approved = await this.showPhaseApprovalDialog(
+          aiResult.reasoning,
+          aiResult.suggested_phase
+        );
+        
+        // Update phase in Supabase based on decision
+        if (approved) {
+          await this.updatePhaseInSupabase(threadId, "doing_the_ask");
+          // Re-call with approval
+          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          convoUpdated.confirm_phase_change = true;
+          aiResult = await this.aiService.generateResponse(
+            convoUpdated,
+            convoUpdated.prospectName || convoUpdated.title || ""
+          );
+        } else {
+          await this.updatePhaseInSupabase(threadId, "building_rapport");
+          // Re-call with rejection
+          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          convoUpdated.confirm_phase_change = false;
+          aiResult = await this.aiService.generateResponse(
+            convoUpdated,
+            convoUpdated.prospectName || convoUpdated.title || ""
+          );
+        }
+      }
+      
+      // Only proceed if we have a valid response
+      if (!aiResult || !aiResult.response) {
+        this.addConsoleLog("AI", "No response generated", { threadId });
+        return;
+      }
       
       this.addConsoleLog("AI", "Received /generate result (auto)", {
         phase: aiResult.phase,
         readyForAsk: aiResult.ready_for_ask,
         knowledgeSnippets: aiResult.input?.knowledge_context?.length || 0,
       });
+      
+      // Update phase in Supabase if it changed
+      if (aiResult.phase && conversationData.phase !== aiResult.phase) {
+        await this.updatePhaseInSupabase(threadId, aiResult.phase);
+      }
       
       // Show suggested response in the top bar (same as manual generation)
       this.setStatus("Suggested", aiResult.response);
@@ -1228,6 +1571,11 @@ class DOMExtractor {
                 placeholders: extractedPlaceholders || {},
               });
               
+              // Update phase display if phase exists
+              if (existing.phase) {
+                this.updatePhaseDisplay(existing.phase);
+              }
+              
               this.addConsoleLog("DB", "Updated existing conversation in Supabase with latest messages", {
                 threadId,
                 messageCount: convo.messages.length,
@@ -1254,6 +1602,12 @@ class DOMExtractor {
                 status: existing.status || "unknown",
                 placeholders: existing.placeholders || {},
               });
+              
+              // Update phase display if phase exists
+              if (existing.phase) {
+                this.updatePhaseDisplay(existing.phase);
+              }
+              
               this.addConsoleLog("DB", "Loaded conversation from Supabase (extraction failed)", { 
                 threadId,
                 error: convo?.error || "Unknown error"
@@ -1273,6 +1627,12 @@ class DOMExtractor {
               status: existing.status || "unknown",
               placeholders: existing.placeholders || {},
             });
+            
+            // Update phase display if phase exists
+            if (existing.phase) {
+              this.updatePhaseDisplay(existing.phase);
+            }
+            
             this.addConsoleLog("DB", "Failed to update conversation", {
               threadId,
               error: e.message
@@ -1500,6 +1860,20 @@ class DOMExtractor {
       return;
     }
     
+    // Check if last message was sent by "you" - if so, skip auto-generation (wait for prospect response)
+    const messages = convo.messages || [];
+    if (messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      const lastSender = lastMessage.sender || (lastMessage.isFromYou ? "you" : "prospect");
+      if (lastSender === "you") {
+        this.addConsoleLog("AI", "Skipping auto-gen - last message was sent by you, waiting for prospect response", { 
+          threadId,
+          lastMessageIndex: messages.length - 1
+        });
+        return;
+      }
+    }
+    
     // Update lead card with status if available
     if (convo.status) {
       this.updateLeadCard({
@@ -1507,11 +1881,48 @@ class DOMExtractor {
       });
     }
 
-    // Generate
-    const aiResult = await this.aiService.generateResponse(
+    // Generate - check for approval
+    let aiResult = await this.aiService.generateResponse(
       convo,
       convo.prospectName || convo.title || ""
     );
+    
+    // Handle approval required - show dialog even for auto-generate
+    if (aiResult.status === "approval_required") {
+      this.setStatus("Waiting", "Approval required for phase transition...");
+      const approved = await this.showPhaseApprovalDialog(
+        aiResult.reasoning,
+        aiResult.suggested_phase
+      );
+      
+      // Update phase in Supabase based on decision
+      if (approved) {
+        await this.updatePhaseInSupabase(threadId, "doing_the_ask");
+        // Re-call with approval
+        const convoUpdated = await this.supabaseService.getConversation(threadId);
+        convoUpdated.confirm_phase_change = true;
+        aiResult = await this.aiService.generateResponse(
+          convoUpdated,
+          convoUpdated.prospectName || convoUpdated.title || ""
+        );
+      } else {
+        await this.updatePhaseInSupabase(threadId, "building_rapport");
+        // Re-call with rejection
+        const convoUpdated = await this.supabaseService.getConversation(threadId);
+        convoUpdated.confirm_phase_change = false;
+        aiResult = await this.aiService.generateResponse(
+          convoUpdated,
+          convoUpdated.prospectName || convoUpdated.title || ""
+        );
+      }
+    }
+    
+    // Only proceed if we have a valid response
+    if (!aiResult || !aiResult.response) {
+      this.addConsoleLog("AI", "No response generated", { threadId });
+      return;
+    }
+    
     this.addConsoleLog("AI", "Generated", { phase: aiResult.phase });
 
     // Copy to clipboard (user will paste manually)
@@ -3238,17 +3649,19 @@ class DOMExtractor {
     if (!container) return;
 
     try {
+      // Try health check first, but don't fail completely if it fails
       const healthy = await this.aiService.checkHealth();
       if (!healthy) {
-        container.innerHTML = '<div class="status-details" style="color: #ffb4b4">AI service not available. Start python main.py</div>';
-        return;
+        container.innerHTML = '<div class="status-details" style="color: #ffb4b4">AI service not available. Start python main.py<br><small style="color: #9aa7b2;">Make sure to run: cd ai_module && python main.py</small></div>';
+        // Still try to load scripts as a fallback
+        console.warn("Health check failed, but attempting to load scripts anyway...");
       }
 
       const result = await this.aiService.getScriptsList();
       const phases = result.phases || {};
 
       if (Object.keys(phases).length === 0) {
-        container.innerHTML = '<div class="status-details" style="color: #9aa7b2">No scripts available</div>';
+        container.innerHTML = '<div class="status-details" style="color: #9aa7b2">No scripts available. Check Flask server logs.</div>';
         return;
       }
 
@@ -3285,9 +3698,15 @@ class DOMExtractor {
           await this.insertScript(phase, templateId);
         });
       });
+      
+      console.log("Successfully loaded and displayed", Object.keys(phases).length, "phases of scripts");
     } catch (error) {
       console.error("Error loading scripts:", error);
-      container.innerHTML = `<div class="status-details" style="color: #ffb4b4">Error loading scripts: ${error.message}</div>`;
+      const errorMsg = error.message || "Unknown error";
+      container.innerHTML = `<div class="status-details" style="color: #ffb4b4">
+        Error loading scripts: ${errorMsg}<br>
+        <small style="color: #9aa7b2;">Make sure Flask is running: cd ai_module && python main.py</small>
+      </div>`;
     }
   }
 

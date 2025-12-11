@@ -178,9 +178,19 @@ class DOMExtractor {
       this.addConsoleLog("AI", "Service healthy", {});
 
       // Generate
+      // If user manually set phase to "doing_the_ask", respect it by setting confirm_phase_change
+      // This tells the orchestrator to respect the manual phase change even if analyzer disagrees
+      if (convo.phase === "doing_the_ask") {
+        convo.confirm_phase_change = true;
+        this.addConsoleLog("AI", "Manual phase override detected - respecting user's phase selection", {
+          phase: convo.phase
+        });
+      }
+      
       this.addConsoleLog("AI", "Requesting /generate", {
         phase: convo.phase,
         messageCount: convo.messages.length,
+        confirm_phase_change: convo.confirm_phase_change,
       });
       let aiResult = await this.aiService.generateResponse(
         convo,

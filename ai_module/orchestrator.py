@@ -214,8 +214,21 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
     # Only ask for approval if the suggested phase is DIFFERENT from the current phase in Supabase
     suggested_phase = "doing_the_ask" if move_forward else "building_rapport"
     
-    if move_forward:
-        # Analyzer wants to move forward to selling phase
+    # Check if user manually set phase to "doing_the_ask" (respect manual overrides)
+    # If current_phase is "doing_the_ask" but analyzer says "building_rapport", it's a manual override
+    # Also respect if confirm_phase_change=True (explicit approval)
+    manual_phase_override = (
+        current_phase == "doing_the_ask" and 
+        analyzer_phase == "building_rapport" and
+        confirm_phase_change is not False  # Not explicitly rejected
+    )
+    
+    if Config.DEBUG and manual_phase_override:
+        print("[Orchestrator] Manual phase override detected: user set phase to 'doing_the_ask' but analyzer suggests 'building_rapport' - respecting user's choice")
+    
+    if move_forward or manual_phase_override:
+        # Analyzer wants to move forward OR user manually set phase to selling
+        # (respect manual phase changes even if analyzer disagrees)
         
         # User explicitly rejected the transition
         if confirm_phase_change is False:
@@ -227,7 +240,8 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
             # Update instruction to continue building rapport
             instruction_for_writer = "Continue building rapport - ask about their interests, school, or current projects"
         # Check if approval is needed: only if current_phase != suggested_phase (i.e., phase change needed)
-        elif current_phase and current_phase != suggested_phase and confirm_phase_change is not True:
+        # AND it's not a manual override
+        elif current_phase and current_phase != suggested_phase and confirm_phase_change is not True and not manual_phase_override:
             # Need approval - return early with approval request
             if Config.DEBUG:
                 print(f"[Orchestrator] PERMISSION GATE: Approval required for phase transition (current={current_phase}, suggested={suggested_phase})")
@@ -246,12 +260,16 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
             }
         else:
             # User approved (confirm_phase_change=True) or no gate needed (already in doing_the_ask or phases match)
+            # OR user manually set phase to doing_the_ask
             phase = "doing_the_ask"
             ready_for_ask = True
             if Config.DEBUG:
-                print(f"[Orchestrator] PERMISSION GATE: Approved or no gate needed - phase='doing_the_ask' (current_phase={current_phase})")
+                if manual_phase_override:
+                    print(f"[Orchestrator] PERMISSION GATE: Manual phase override detected - respecting user's phase='doing_the_ask' (analyzer suggested={suggested_phase})")
+                else:
+                    print(f"[Orchestrator] PERMISSION GATE: Approved or no gate needed - phase='doing_the_ask' (current_phase={current_phase})")
     else:
-        # Analyzer says stay in rapport phase
+        # Analyzer says stay in rapport phase AND no manual override
         phase = "building_rapport"
         ready_for_ask = False
         if Config.DEBUG:

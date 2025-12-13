@@ -336,12 +336,22 @@
       <div class="status-text" id="leadName">Lead: —</div>
       <div class="status-details" id="leadDescription">No recent activity.</div>
       <div class="status-details" id="leadData" style="margin-top: 6px"></div>
-      
+
       <!-- Status Section - Compact -->
-      <div style="margin-top: 8px;">
-        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-          <span class="status-details" style="font-weight: 600; color: #9aa7b2; font-size: 12px;">Status:</span>
-          <select id="leadStatusSelect" class="compact" style="flex: 1; min-width: 100px;">
+      <div style="margin-top: 8px">
+        <div
+          style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap"
+        >
+          <span
+            class="status-details"
+            style="font-weight: 600; color: #9aa7b2; font-size: 12px"
+            >Status:</span
+          >
+          <select
+            id="leadStatusSelect"
+            class="compact"
+            style="flex: 1; min-width: 100px"
+          >
             <option value="unknown">Unknown</option>
             <option value="uninterested">Uninterested</option>
             <option value="interested">Interested</option>
@@ -360,23 +370,90 @@
         <span id="placeholdersToggleText">Placeholders</span>
       </button>
       <div id="placeholdersContent" class="collapsible-content">
-        <div class="status-details" style="margin-bottom: 8px; font-size: 11px; color: #9aa7b2;">
+        <div
+          class="status-details"
+          style="margin-bottom: 8px; font-size: 11px; color: #9aa7b2"
+        >
           Edit placeholder values used in script templates.
         </div>
-        <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="display: flex; flex-direction: column; gap: 6px">
           <div>
-            <label class="status-details" style="font-size: 11px; color: #9aa7b2; display: block; margin-bottom: 3px;">Name</label>
-            <input type="text" id="placeholderName" class="compact" placeholder="Name" style="width: 100%; font-size: 12px; padding: 5px 8px; height: 28px;" />
+            <label
+              class="status-details"
+              style="
+                font-size: 11px;
+                color: #9aa7b2;
+                display: block;
+                margin-bottom: 3px;
+              "
+              >Name</label
+            >
+            <input
+              type="text"
+              id="placeholderName"
+              class="compact"
+              placeholder="Name"
+              style="
+                width: 100%;
+                font-size: 12px;
+                padding: 5px 8px;
+                height: 28px;
+              "
+            />
           </div>
           <div>
-            <label class="status-details" style="font-size: 11px; color: #9aa7b2; display: block; margin-bottom: 3px;">School</label>
-            <input type="text" id="placeholderSchool" class="compact" placeholder="School" style="width: 100%; font-size: 12px; padding: 5px 8px; height: 28px;" />
+            <label
+              class="status-details"
+              style="
+                font-size: 11px;
+                color: #9aa7b2;
+                display: block;
+                margin-bottom: 3px;
+              "
+              >School</label
+            >
+            <input
+              type="text"
+              id="placeholderSchool"
+              class="compact"
+              placeholder="School"
+              style="
+                width: 100%;
+                font-size: 12px;
+                padding: 5px 8px;
+                height: 28px;
+              "
+            />
           </div>
           <div>
-            <label class="status-details" style="font-size: 11px; color: #9aa7b2; display: block; margin-bottom: 3px;">Idea/Vision</label>
-            <input type="text" id="placeholderIdea" class="compact" placeholder="Idea/Vision" style="width: 100%; font-size: 12px; padding: 5px 8px; height: 28px;" />
+            <label
+              class="status-details"
+              style="
+                font-size: 11px;
+                color: #9aa7b2;
+                display: block;
+                margin-bottom: 3px;
+              "
+              >Idea/Vision</label
+            >
+            <input
+              type="text"
+              id="placeholderIdea"
+              class="compact"
+              placeholder="Idea/Vision"
+              style="
+                width: 100%;
+                font-size: 12px;
+                padding: 5px 8px;
+                height: 28px;
+              "
+            />
           </div>
-          <button id="updatePlaceholdersBtn" class="btn btn-ghost btn-small" style="margin-top: 4px; font-size: 11px; padding: 6px 10px;">
+          <button
+            id="updatePlaceholdersBtn"
+            class="btn btn-ghost btn-small"
+            style="margin-top: 4px; font-size: 11px; padding: 6px 10px"
+          >
             Save Placeholders
           </button>
         </div>
@@ -399,7 +476,14 @@
 
     <!-- Suggested container (status area with message and phase) -->
     <div class="status" style="margin-top: 10px">
-      <div class="status-text" style="display: flex; align-items: center; justify-content: space-between">
+      <div
+        class="status-text"
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        "
+      >
         <span id="statusText">Ready</span>
         <div style="display: flex; align-items: center; gap: 4px">
           <button
@@ -413,7 +497,12 @@
           <div
             id="respCounter"
             class="status-details"
-            style="min-width: 32px; text-align: center; font-size: 10px; color: #9aa7b2"
+            style="
+              min-width: 32px;
+              text-align: center;
+              font-size: 10px;
+              color: #9aa7b2;
+            "
           >
             0/0
           </div>
@@ -427,15 +516,66 @@
           </button>
         </div>
       </div>
-      <div class="status-details" id="statusDetails">
+      <div
+        class="status-details"
+        id="statusDetails"
+        style="position: relative; padding-right: 70px"
+      >
         Click to extract current page DOM
+        <button
+          id="copyResponseBtn"
+          class="btn btn-ghost btn-small"
+          style="
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 0;
+            font-size: 11px;
+            padding: 4px 8px;
+            min-width: auto;
+            z-index: 10;
+          "
+          title="Copy response to clipboard"
+        >
+          📋 Copy
+        </button>
       </div>
-      <div class="status-details" id="statusPhase" style="margin-top: 8px; padding: 8px 10px; background: rgba(59, 130, 246, 0.1); border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.3); display: none;">
-        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+      <div
+        class="status-details"
+        id="statusPhase"
+        style="
+          margin-top: 8px;
+          padding: 8px 10px;
+          background: rgba(59, 130, 246, 0.1);
+          border-radius: 6px;
+          border: 1px solid rgba(59, 130, 246, 0.3);
+          display: none;
+        "
+      >
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+          "
+        >
           <div>
-            <strong style="color: #8ab4ff;">Phase:</strong> <span id="phaseValue">—</span>
+            <strong style="color: #8ab4ff">Phase:</strong>
+            <span id="phaseValue">—</span>
           </div>
-          <select id="phaseSelect" class="compact" style="flex: 1; min-width: 120px; max-width: 150px; font-size: 11px; padding: 4px 6px; height: 26px;">
+          <select
+            id="phaseSelect"
+            class="compact"
+            style="
+              flex: 1;
+              min-width: 120px;
+              max-width: 150px;
+              font-size: 11px;
+              padding: 4px 6px;
+              height: 26px;
+            "
+          >
             <option value="building_rapport">Building Rapport</option>
             <option value="doing_the_ask">Selling Phase</option>
           </select>
@@ -460,11 +600,17 @@
         <span>Script Templates</span>
       </button>
       <div id="scriptsContent" class="collapsible-content">
-        <div class="status-details" id="scriptsStatusMessage" style="margin-bottom: 10px">
+        <div
+          class="status-details"
+          id="scriptsStatusMessage"
+          style="margin-bottom: 10px"
+        >
           Click a button to insert the script into the message input.
         </div>
         <div id="scriptsContainer">
-          <div class="status-details" style="color: #9aa7b2">Loading scripts...</div>
+          <div class="status-details" style="color: #9aa7b2">
+            Loading scripts...
+          </div>
         </div>
       </div>
     </div>
@@ -476,19 +622,25 @@
       </button>
       <div id="kbContent" class="collapsible-content">
         <div class="status-details" id="kbStatusMessage">
-          Save answers for future conversations. Only you can trigger this action manually.
+          Save answers for future conversations. Only you can trigger this
+          action manually.
         </div>
         <div class="kb-field">
-          <label class="status-details kb-label">
-            Question (optional)
-          </label>
-          <textarea id="kbQuestionInput" placeholder="What question did the student ask?"></textarea>
+          <label class="status-details kb-label"> Question (optional) </label>
+          <textarea
+            id="kbQuestionInput"
+            placeholder="What question did the student ask?"
+          ></textarea>
         </div>
         <div class="kb-field">
           <label class="status-details kb-label">
             Answer / Context to reuse
           </label>
-          <textarea id="kbAnswerInput" placeholder="Write the answer you want the AI to reuse" required></textarea>
+          <textarea
+            id="kbAnswerInput"
+            placeholder="Write the answer you want the AI to reuse"
+            required
+          ></textarea>
         </div>
         <div class="kb-field">
           <label class="status-details kb-label">
@@ -512,7 +664,11 @@
             placeholder="e.g. manual-entry, conversation-<thread>"
           />
         </div>
-        <button class="btn btn-secondary" id="saveKbBtn" style="margin-top:12px">
+        <button
+          class="btn btn-secondary"
+          id="saveKbBtn"
+          style="margin-top: 12px"
+        >
           Save to Knowledge Base
         </button>
       </div>

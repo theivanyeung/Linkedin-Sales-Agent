@@ -137,6 +137,29 @@ PHASE_LIBRARY: Dict[str, Dict[str, Any]] = {
                     "$985 initial deposit. More details here: https://www.prodicity.org/fellowship"
                 ),
             },
+            "objection_handling": {
+                "description": "Psychological scripts to isolate and overcome objections.",
+                "tactics": {
+                    "isolate_price": (
+                        "If the application fee wasn't a factor, would you be ready to start this week? "
+                        "(I want to separate the money from the motivation)."
+                    ),
+                    "isolate_fit": (
+                        "Let's pretend for a second that money isn't an issue. "
+                        "Do you feel like Prodicity is exactly what you need to get your project to the next level, "
+                        "or are you still unsure about the value?"
+                    ),
+                    "scale_1_to_10": (
+                        "On a scale of 1 to 10, how confident are you that this fellowship helps you hit your goals? "
+                        "(If they say <10, ask: 'What would it take to get you to a 10?')"
+                    ),
+                    "the_takeaway": (
+                        "It sounds like now might simply not be the right time, and that is totally okay. "
+                        "We can always reconnect next semester if your schedule opens up. "
+                        "(Often makes them chase you)."
+                    )
+                }
+            },
         },
         "guidelines": [
             "Reference specific things the student told you about their project or pain points.",

@@ -48,7 +48,7 @@ class DOMExtractor {
       prevBtn.addEventListener("click", () => this.navigateHistory(-1));
     if (nextBtn)
       nextBtn.addEventListener("click", () => this.navigateHistory(1));
-    
+
     const saveKbBtn = document.getElementById("saveKbBtn");
     if (saveKbBtn) {
       saveKbBtn.addEventListener("click", () => this.saveKnowledgeEntry());
@@ -66,35 +66,49 @@ class DOMExtractor {
 
     const placeholdersToggle = document.getElementById("placeholdersToggle");
     if (placeholdersToggle) {
-      placeholdersToggle.addEventListener("click", () => this.togglePlaceholders());
+      placeholdersToggle.addEventListener("click", () =>
+        this.togglePlaceholders()
+      );
     }
 
     this.kbStatusEl = document.getElementById("kbStatusMessage");
-    
+
     // Auto-save status when dropdown changes (no button needed)
     const statusSelect = document.getElementById("leadStatusSelect");
     if (statusSelect) {
       statusSelect.addEventListener("change", () => this.updateLeadStatus());
     }
-    
+
     // Phase selector - manual phase change
     const phaseSelect = document.getElementById("phaseSelect");
     if (phaseSelect) {
       phaseSelect.addEventListener("change", () => this.handlePhaseChange());
     }
-    
-    const updatePlaceholdersBtn = document.getElementById("updatePlaceholdersBtn");
+
+    const updatePlaceholdersBtn = document.getElementById(
+      "updatePlaceholdersBtn"
+    );
     if (updatePlaceholdersBtn) {
-      updatePlaceholdersBtn.addEventListener("click", () => this.updatePlaceholders());
+      updatePlaceholdersBtn.addEventListener("click", () =>
+        this.updatePlaceholders()
+      );
     }
-    
+
+    // Copy response button
+    const copyResponseBtn = document.getElementById("copyResponseBtn");
+    if (copyResponseBtn) {
+      copyResponseBtn.addEventListener("click", () =>
+        this.copyResponseToClipboard()
+      );
+    }
+
     // Load scripts on init
     this.loadScripts();
-    
+
     // Ensure Script Templates panel is closed by default
     this.ensureScriptsPanelClosed();
   }
-  
+
   ensureScriptsPanelClosed() {
     const content = document.getElementById("scriptsContent");
     const icon = document.getElementById("scriptsToggleIcon");
@@ -145,7 +159,9 @@ class DOMExtractor {
       // Fetch conversation from Supabase
       const convo = await this.supabaseService.getConversation(threadId);
       if (!convo || !convo.messages || !convo.messages.length) {
-        this.addConsoleLog("SUPABASE", "No conversation found in cloud", { threadId });
+        this.addConsoleLog("SUPABASE", "No conversation found in cloud", {
+          threadId,
+        });
         throw new Error(
           "No conversation data in cloud. Click Update Cloud first."
         );
@@ -155,10 +171,10 @@ class DOMExtractor {
         messageCount: convo.messages.length,
         status: convo.status || "unknown",
       });
-      
+
       // Update lead card with status from conversation
       this.updateLeadCard({
-        name: convo.title || (convo.placeholders?.name) || "—",
+        name: convo.title || convo.placeholders?.name || "—",
         description: convo.description || "",
         status: convo.status || "unknown",
         placeholders: convo.placeholders || {},
@@ -182,11 +198,15 @@ class DOMExtractor {
       // This tells the orchestrator to respect the manual phase change even if analyzer disagrees
       if (convo.phase === "doing_the_ask") {
         convo.confirm_phase_change = true;
-        this.addConsoleLog("AI", "Manual phase override detected - respecting user's phase selection", {
-          phase: convo.phase
-        });
+        this.addConsoleLog(
+          "AI",
+          "Manual phase override detected - respecting user's phase selection",
+          {
+            phase: convo.phase,
+          }
+        );
       }
-      
+
       this.addConsoleLog("AI", "Requesting /generate", {
         phase: convo.phase,
         messageCount: convo.messages.length,
@@ -196,7 +216,7 @@ class DOMExtractor {
         convo,
         convo.prospectName || convo.title || ""
       );
-      
+
       // Handle approval required
       if (aiResult.status === "approval_required") {
         this.setStatus("Waiting", "Approval required for phase transition...");
@@ -204,12 +224,14 @@ class DOMExtractor {
           aiResult.reasoning,
           aiResult.suggested_phase
         );
-        
+
         // Update phase in Supabase based on decision
         if (approved) {
           await this.updatePhaseInSupabase(threadId, "doing_the_ask");
           // Re-call with approval
-          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          const convoUpdated = await this.supabaseService.getConversation(
+            threadId
+          );
           convoUpdated.confirm_phase_change = true;
           aiResult = await this.aiService.generateResponse(
             convoUpdated,
@@ -218,7 +240,9 @@ class DOMExtractor {
         } else {
           await this.updatePhaseInSupabase(threadId, "building_rapport");
           // Re-call with rejection
-          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          const convoUpdated = await this.supabaseService.getConversation(
+            threadId
+          );
           convoUpdated.confirm_phase_change = false;
           aiResult = await this.aiService.generateResponse(
             convoUpdated,
@@ -226,14 +250,14 @@ class DOMExtractor {
           );
         }
       }
-      
+
       // Only proceed if we have a valid response
       if (!aiResult || !aiResult.response) {
         this.addConsoleLog("AI", "No response generated", { threadId });
         this.setStatus("Ready", "No response generated");
         return;
       }
-      
+
       this.addConsoleLog("AI", "Received /generate result", {
         phase: aiResult.phase,
         readyForAsk: aiResult.ready_for_ask,
@@ -243,10 +267,10 @@ class DOMExtractor {
       // Show suggested response in the top bar and add to history
       this.setStatus("Suggested", aiResult.response);
       this.addToHistory(threadId, aiResult.response);
-      
+
       // Update phase display
       this.updatePhaseDisplay(aiResult.phase);
-      
+
       // Update phase in Supabase if it changed
       if (aiResult.phase && convo.phase !== aiResult.phase) {
         await this.updatePhaseInSupabase(threadId, aiResult.phase);
@@ -262,9 +286,11 @@ class DOMExtractor {
         });
       } catch (clipboardError) {
         // Log clipboard error to console only, don't affect status
-        this.addConsoleLog("ERROR", "Failed to copy to clipboard", { 
+        this.addConsoleLog("ERROR", "Failed to copy to clipboard", {
           error: clipboardError.message,
-          response: aiResult?.response ? aiResult.response.substring(0, 50) + "..." : "No response"
+          response: aiResult?.response
+            ? aiResult.response.substring(0, 50) + "..."
+            : "No response",
         });
         console.error("Clipboard copy failed:", clipboardError);
       }
@@ -276,15 +302,100 @@ class DOMExtractor {
         this.setStatus("Error", e.message || "Failed generating from cloud");
       } else {
         // For clipboard errors, just show the response (user can copy manually)
-        this.setStatus("Suggested", aiResult?.response || "Response generated - copy manually");
+        this.setStatus(
+          "Suggested",
+          aiResult?.response || "Response generated - copy manually"
+        );
       }
-      this.addConsoleLog("ERROR", "generateFromCloud failed", { error: e.message });
+      this.addConsoleLog("ERROR", "generateFromCloud failed", {
+        error: e.message,
+      });
     }
   }
 
   setStatus(text, details) {
     document.getElementById("statusText").textContent = text;
-    document.getElementById("statusDetails").textContent = details;
+    const statusDetailsEl = document.getElementById("statusDetails");
+    statusDetailsEl.textContent = details;
+
+    // Show/hide copy button based on status
+    const copyBtn = document.getElementById("copyResponseBtn");
+    if (copyBtn) {
+      if (text === "Suggested" && details) {
+        copyBtn.style.display = "block";
+        // Store the response text for copying
+        copyBtn.dataset.responseText = details;
+      } else {
+        copyBtn.style.display = "none";
+        copyBtn.dataset.responseText = "";
+      }
+    }
+  }
+
+  async copyResponseToClipboard() {
+    const copyBtn = document.getElementById("copyResponseBtn");
+    if (!copyBtn) return;
+
+    const responseText = copyBtn.dataset.responseText;
+    if (!responseText) {
+      this.addConsoleLog("ERROR", "No response text to copy", {});
+      return;
+    }
+
+    try {
+      // Try modern clipboard API first
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(responseText);
+        this.addConsoleLog("UI", "Response copied to clipboard", {
+          length: responseText.length,
+        });
+
+        // Show visual feedback
+        const originalText = copyBtn.textContent;
+        copyBtn.textContent = "✓ Copied";
+        copyBtn.style.background = "rgba(34, 197, 94, 0.2)";
+        copyBtn.style.borderColor = "#22c55e";
+
+        setTimeout(() => {
+          copyBtn.textContent = originalText;
+          copyBtn.style.background = "";
+          copyBtn.style.borderColor = "";
+        }, 2000);
+      } else {
+        // Fallback: create temporary textarea
+        const textarea = document.createElement("textarea");
+        textarea.value = responseText;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-999999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+
+        this.addConsoleLog("UI", "Response copied to clipboard (fallback)", {
+          length: responseText.length,
+        });
+
+        // Show visual feedback
+        const originalText = copyBtn.textContent;
+        copyBtn.textContent = "✓ Copied";
+        setTimeout(() => {
+          copyBtn.textContent = originalText;
+        }, 2000);
+      }
+    } catch (error) {
+      console.error("Failed to copy to clipboard:", error);
+      this.addConsoleLog("ERROR", "Failed to copy to clipboard", {
+        error: error.message,
+      });
+
+      // Show error feedback
+      const originalText = copyBtn.textContent;
+      copyBtn.textContent = "❌ Error";
+      setTimeout(() => {
+        copyBtn.textContent = originalText;
+      }, 2000);
+    }
   }
 
   addConsoleLog(tag, message, meta) {
@@ -302,22 +413,34 @@ class DOMExtractor {
     } catch (_) {}
   }
 
-  updateLeadCard({ name = "—", description = "", dataHtml = "", status = "unknown", placeholders = {} } = {}) {
+  updateLeadCard({
+    name = "—",
+    description = "",
+    dataHtml = "",
+    status = "unknown",
+    placeholders = {},
+  } = {}) {
     const nameEl = document.getElementById("leadName");
     const descEl = document.getElementById("leadDescription");
     const dataEl = document.getElementById("leadData");
     const statusSelect = document.getElementById("leadStatusSelect");
     const leadCard = document.getElementById("leadCard");
-    
+
     // Placeholder input fields
     const placeholderNameInput = document.getElementById("placeholderName");
     const placeholderSchoolInput = document.getElementById("placeholderSchool");
     const placeholderIdeaInput = document.getElementById("placeholderIdea");
-    
+
     // Update status class on lead card for color coding
     if (leadCard) {
       // Remove all status classes
-      leadCard.classList.remove("status-unknown", "status-interested", "status-enrolled", "status-ambassador", "status-uninterested");
+      leadCard.classList.remove(
+        "status-unknown",
+        "status-interested",
+        "status-enrolled",
+        "status-ambassador",
+        "status-uninterested"
+      );
       // Add the current status class
       if (status) {
         leadCard.classList.add(`status-${status}`);
@@ -325,7 +448,7 @@ class DOMExtractor {
         leadCard.classList.add("status-unknown");
       }
     }
-    
+
     if (nameEl) nameEl.textContent = `Lead: ${name}`;
     if (descEl) {
       descEl.textContent = description || "";
@@ -334,7 +457,7 @@ class DOMExtractor {
     if (statusSelect && status) {
       statusSelect.value = status;
     }
-    
+
     // Update placeholder input fields
     if (placeholderNameInput) {
       placeholderNameInput.value = placeholders.name || "";
@@ -342,26 +465,36 @@ class DOMExtractor {
     }
     if (placeholderSchoolInput) {
       placeholderSchoolInput.value = placeholders.school || "";
-      placeholderSchoolInput.title = placeholders.school || "School placeholder";
+      placeholderSchoolInput.title =
+        placeholders.school || "School placeholder";
     }
     if (placeholderIdeaInput) {
       placeholderIdeaInput.value = placeholders.their_idea_pain_vision || "";
-      placeholderIdeaInput.title = placeholders.their_idea_pain_vision || "Idea/Vision placeholder";
+      placeholderIdeaInput.title =
+        placeholders.their_idea_pain_vision || "Idea/Vision placeholder";
     }
-    
+
     // Update placeholder toggle button text with actual values (compact, no wrap)
-    const placeholdersToggleText = document.getElementById("placeholdersToggleText");
+    const placeholdersToggleText = document.getElementById(
+      "placeholdersToggleText"
+    );
     if (placeholdersToggleText) {
       const toggleParts = [];
       if (placeholders.name) toggleParts.push(`${placeholders.name}`);
       if (placeholders.school) toggleParts.push(`${placeholders.school}`);
       // Don't include idea/vision in header to keep it compact
-      
+
       if (toggleParts.length > 0) {
         // Format: "Name • School" - simple and compact
         placeholdersToggleText.textContent = toggleParts.join(" • ");
         // Add title attribute for full text on hover
-        placeholdersToggleText.title = `Name: ${placeholders.name || "—"} • School: ${placeholders.school || "—"}${placeholders.their_idea_pain_vision ? ` • Idea: ${placeholders.their_idea_pain_vision}` : ""}`;
+        placeholdersToggleText.title = `Name: ${
+          placeholders.name || "—"
+        } • School: ${placeholders.school || "—"}${
+          placeholders.their_idea_pain_vision
+            ? ` • Idea: ${placeholders.their_idea_pain_vision}`
+            : ""
+        }`;
       } else {
         placeholdersToggleText.textContent = "Placeholders";
         placeholdersToggleText.title = "Click to edit placeholder values";
@@ -375,10 +508,10 @@ class DOMExtractor {
   async handlePhaseChange() {
     const phaseSelect = document.getElementById("phaseSelect");
     if (!phaseSelect) return;
-    
+
     const newPhase = phaseSelect.value;
     if (!newPhase) return;
-    
+
     const threadId = await this.getActiveThreadId();
     if (!threadId) {
       this.addConsoleLog("ERROR", "Not on a LinkedIn conversation thread", {});
@@ -389,20 +522,25 @@ class DOMExtractor {
       }
       return;
     }
-    
+
     try {
       this.setStatus("Saving", "Updating phase...");
       await this.updatePhaseInSupabase(threadId, newPhase);
-      
+
       // Update display
       this.updatePhaseDisplay(newPhase);
-      
-      this.setStatus("Success", `Phase updated to ${newPhase === "doing_the_ask" ? "Selling Phase" : "Building Rapport"}`);
+
+      this.setStatus(
+        "Success",
+        `Phase updated to ${
+          newPhase === "doing_the_ask" ? "Selling Phase" : "Building Rapport"
+        }`
+      );
       this.addConsoleLog("DB", "Phase manually changed", {
         threadId,
         newPhase,
       });
-      
+
       setTimeout(() => {
         this.setStatus("Ready", "Phase updated");
       }, 2000);
@@ -413,7 +551,7 @@ class DOMExtractor {
         threadId,
         error: error.message,
       });
-      
+
       // Revert select to previous value
       const convo = await this.supabaseService.getConversation(threadId);
       if (convo && convo.phase) {
@@ -429,30 +567,39 @@ class DOMExtractor {
 
     const status = statusSelect.value;
     const threadId = await this.getActiveThreadId();
-    
+
     if (!threadId) {
       // Silently fail if not on a conversation page
       return;
     }
-    
+
     try {
       // Auto-save status (no button feedback needed)
       await this.supabaseService.updateLeadStatus(threadId, status);
-      
+
       this.addConsoleLog("CRM", "Status auto-updated", { threadId, status });
-      
+
       // Update lead card to reflect new status color immediately
       const leadCard = document.getElementById("leadCard");
       if (leadCard) {
         // Remove all status classes
-        leadCard.classList.remove("status-unknown", "status-interested", "status-enrolled", "status-ambassador", "status-uninterested", "status-graduated");
+        leadCard.classList.remove(
+          "status-unknown",
+          "status-interested",
+          "status-enrolled",
+          "status-ambassador",
+          "status-uninterested",
+          "status-graduated"
+        );
         // Add the new status class
         leadCard.classList.add(`status-${status}`);
       }
     } catch (error) {
       // Silently fail - don't interrupt user workflow
       console.error("Error updating lead status:", error);
-      this.addConsoleLog("CRM", "Status update failed", { error: error.message });
+      this.addConsoleLog("CRM", "Status update failed", {
+        error: error.message,
+      });
     }
   }
 
@@ -461,35 +608,36 @@ class DOMExtractor {
     const nameInput = document.getElementById("placeholderName");
     const schoolInput = document.getElementById("placeholderSchool");
     const ideaInput = document.getElementById("placeholderIdea");
-    
+
     if (!updateBtn) return;
-    
+
     const threadId = await this.getActiveThreadId();
-    
+
     if (!threadId) {
       alert("Please open a LinkedIn conversation thread first.");
       return;
     }
-    
+
     // Get placeholder values from inputs
     const placeholders = {
       name: nameInput?.value.trim() || null,
       school: schoolInput?.value.trim() || null,
       their_idea_pain_vision: ideaInput?.value.trim() || null,
     };
-    
+
     // Remove empty strings and convert to null
     if (placeholders.name === "") placeholders.name = null;
     if (placeholders.school === "") placeholders.school = null;
-    if (placeholders.their_idea_pain_vision === "") placeholders.their_idea_pain_vision = null;
-    
+    if (placeholders.their_idea_pain_vision === "")
+      placeholders.their_idea_pain_vision = null;
+
     try {
       updateBtn.disabled = true;
       updateBtn.textContent = "Saving...";
-      
+
       // Get existing conversation to preserve other fields
       const existing = await this.supabaseService.getConversation(threadId);
-      
+
       if (existing) {
         // Update conversation with new placeholders
         await this.supabaseService.saveConversation({
@@ -504,35 +652,46 @@ class DOMExtractor {
       } else {
         // If conversation doesn't exist, we need to create it
         // But we don't have messages, so we can't create it properly
-        this.addConsoleLog("PLACEHOLDERS", "Cannot update placeholders - conversation not found", { threadId });
-        alert("Please extract the conversation first by clicking 'Update Cloud'.");
+        this.addConsoleLog(
+          "PLACEHOLDERS",
+          "Cannot update placeholders - conversation not found",
+          { threadId }
+        );
+        alert(
+          "Please extract the conversation first by clicking 'Update Cloud'."
+        );
         updateBtn.textContent = "Save Placeholders";
         updateBtn.disabled = false;
         return;
       }
-      
-      this.addConsoleLog("PLACEHOLDERS", "Placeholders updated", { threadId, placeholders });
+
+      this.addConsoleLog("PLACEHOLDERS", "Placeholders updated", {
+        threadId,
+        placeholders,
+      });
       updateBtn.textContent = "✅ Saved";
-      
+
       // Update the UI immediately to reflect saved placeholders
       // Refresh the lead card to update toggle text and summary
       const updated = await this.supabaseService.getConversation(threadId);
       if (updated) {
         this.updateLeadCard({
-          name: updated.title || (updated.placeholders?.name) || "—",
+          name: updated.title || updated.placeholders?.name || "—",
           description: updated.description || "",
           status: updated.status || "unknown",
           placeholders: updated.placeholders || placeholders,
         });
       }
-      
+
       setTimeout(() => {
         updateBtn.textContent = "Save Placeholders";
         updateBtn.disabled = false;
       }, 2000);
     } catch (error) {
       console.error("Error updating placeholders:", error);
-      this.addConsoleLog("PLACEHOLDERS", "Placeholder update failed", { error: error.message });
+      this.addConsoleLog("PLACEHOLDERS", "Placeholder update failed", {
+        error: error.message,
+      });
       alert(`Failed to update placeholders: ${error.message}`);
       updateBtn.textContent = "Save Placeholders";
       updateBtn.disabled = false;
@@ -546,12 +705,13 @@ class DOMExtractor {
     if (!phaseEl || !phaseValueEl) return;
 
     if (phase) {
-      const phaseText = phase === "doing_the_ask" ? "Selling Phase" : "Building Rapport";
+      const phaseText =
+        phase === "doing_the_ask" ? "Selling Phase" : "Building Rapport";
       const phaseColor = phase === "doing_the_ask" ? "#f39c12" : "#8ab4ff";
       phaseValueEl.textContent = phaseText;
       phaseValueEl.style.color = phaseColor;
       phaseEl.style.display = "block";
-      
+
       // Update select dropdown
       if (phaseSelect) {
         phaseSelect.value = phase;
@@ -701,8 +861,8 @@ class DOMExtractor {
 
       // Use message passing to content script instead of script injection
       const domData = await chrome.tabs.sendMessage(tab.id, {
-        action: 'extractConversation',
-        force: true
+        action: "extractConversation",
+        force: true,
       });
 
       if (!domData) {
@@ -1290,26 +1450,28 @@ class DOMExtractor {
         btn.textContent = "Generating...";
       }
       this.setStatus("Thinking", "Generating suggested reply...");
-      
+
       // Get thread ID for phase updates
       const [tab] = await chrome.tabs.query({
         active: true,
         currentWindow: true,
       });
       const threadId = tab?.url?.match(/\/thread\/([^\/\?]+)/)?.[1];
-      
+
       // Get conversation to pass phase
       const convo = await this.supabaseService.getConversation(threadId);
       if (!convo) {
-        throw new Error("No conversation found. Please save the conversation first.");
+        throw new Error(
+          "No conversation found. Please save the conversation first."
+        );
       }
-      
+
       // First call - check for approval
       let aiResult = await this.aiService.generateResponse(
         convo,
         convo.prospectName || convo.title || ""
       );
-      
+
       // Handle approval required
       if (aiResult.status === "approval_required") {
         this.setStatus("Waiting", "Approval required for phase transition...");
@@ -1317,12 +1479,14 @@ class DOMExtractor {
           aiResult.reasoning,
           aiResult.suggested_phase
         );
-        
+
         // Update phase in Supabase based on decision
         if (approved) {
           await this.updatePhaseInSupabase(threadId, "doing_the_ask");
           // Re-call with approval
-          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          const convoUpdated = await this.supabaseService.getConversation(
+            threadId
+          );
           convoUpdated.confirm_phase_change = true;
           aiResult = await this.aiService.generateResponse(
             convoUpdated,
@@ -1331,7 +1495,9 @@ class DOMExtractor {
         } else {
           await this.updatePhaseInSupabase(threadId, "building_rapport");
           // Re-call with rejection
-          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          const convoUpdated = await this.supabaseService.getConversation(
+            threadId
+          );
           convoUpdated.confirm_phase_change = false;
           aiResult = await this.aiService.generateResponse(
             convoUpdated,
@@ -1339,20 +1505,22 @@ class DOMExtractor {
           );
         }
       }
-      
+
       // Inject response if we have one
       if (aiResult && aiResult.response) {
         await this.aiService.generateAndInject(this.supabaseService);
       }
-      
+
       // Update phase in Supabase if it changed
       if (aiResult && aiResult.phase && threadId) {
-        const currentConvo = await this.supabaseService.getConversation(threadId);
+        const currentConvo = await this.supabaseService.getConversation(
+          threadId
+        );
         if (currentConvo && currentConvo.phase !== aiResult.phase) {
           await this.updatePhaseInSupabase(threadId, aiResult.phase);
         }
       }
-      
+
       // Show the response, not clipboard status
       if (aiResult && aiResult.response) {
         this.setStatus("Suggested", aiResult.response);
@@ -1360,7 +1528,7 @@ class DOMExtractor {
       } else {
         this.setStatus("Ready", "Response generated. Copy manually if needed.");
       }
-      
+
       if (btn) btn.textContent = "✅ Generated";
       setTimeout(() => {
         if (btn) {
@@ -1380,7 +1548,9 @@ class DOMExtractor {
         this.setStatus("Suggested", "Response generated - copy manually");
         if (btn) btn.textContent = "✅ Generated";
       }
-      this.addConsoleLog("ERROR", "generateResponse failed", { error: e.message });
+      this.addConsoleLog("ERROR", "generateResponse failed", {
+        error: e.message,
+      });
       setTimeout(() => {
         if (btn) {
           btn.disabled = false;
@@ -1396,36 +1566,51 @@ class DOMExtractor {
    */
   async autoGenerateResponse(threadId) {
     try {
-      this.addConsoleLog("AI", "Auto-generating response after save", { threadId });
+      this.addConsoleLog("AI", "Auto-generating response after save", {
+        threadId,
+      });
       this.setStatus("Thinking", "Auto-generating response...");
-      
+
       // Get the conversation from Supabase (just saved)
-      const conversationData = await this.supabaseService.getConversation(threadId);
-      if (!conversationData || !conversationData.messages || conversationData.messages.length === 0) {
-        this.addConsoleLog("AI", "Skipping auto-gen - no messages", { threadId });
+      const conversationData = await this.supabaseService.getConversation(
+        threadId
+      );
+      if (
+        !conversationData ||
+        !conversationData.messages ||
+        conversationData.messages.length === 0
+      ) {
+        this.addConsoleLog("AI", "Skipping auto-gen - no messages", {
+          threadId,
+        });
         return;
       }
-      
+
       // Check if last message was sent by "you" - if so, skip auto-generation (wait for prospect response)
       const messages = conversationData.messages || [];
       if (messages.length > 0) {
         const lastMessage = messages[messages.length - 1];
-        const lastSender = lastMessage.sender || (lastMessage.isFromYou ? "you" : "prospect");
+        const lastSender =
+          lastMessage.sender || (lastMessage.isFromYou ? "you" : "prospect");
         if (lastSender === "you") {
-          this.addConsoleLog("AI", "Skipping auto-gen - last message was sent by you, waiting for prospect response", { 
-            threadId,
-            lastMessageIndex: messages.length - 1
-          });
+          this.addConsoleLog(
+            "AI",
+            "Skipping auto-gen - last message was sent by you, waiting for prospect response",
+            {
+              threadId,
+              lastMessageIndex: messages.length - 1,
+            }
+          );
           return;
         }
       }
-      
+
       // Generate response using AI service
       let aiResult = await this.aiService.generateResponse(
         conversationData,
         conversationData.prospectName || conversationData.title || ""
       );
-      
+
       // Handle approval required - show dialog even for auto-generate
       if (aiResult.status === "approval_required") {
         this.setStatus("Waiting", "Approval required for phase transition...");
@@ -1433,12 +1618,14 @@ class DOMExtractor {
           aiResult.reasoning,
           aiResult.suggested_phase
         );
-        
+
         // Update phase in Supabase based on decision
         if (approved) {
           await this.updatePhaseInSupabase(threadId, "doing_the_ask");
           // Re-call with approval
-          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          const convoUpdated = await this.supabaseService.getConversation(
+            threadId
+          );
           convoUpdated.confirm_phase_change = true;
           aiResult = await this.aiService.generateResponse(
             convoUpdated,
@@ -1447,7 +1634,9 @@ class DOMExtractor {
         } else {
           await this.updatePhaseInSupabase(threadId, "building_rapport");
           // Re-call with rejection
-          const convoUpdated = await this.supabaseService.getConversation(threadId);
+          const convoUpdated = await this.supabaseService.getConversation(
+            threadId
+          );
           convoUpdated.confirm_phase_change = false;
           aiResult = await this.aiService.generateResponse(
             convoUpdated,
@@ -1455,50 +1644,61 @@ class DOMExtractor {
           );
         }
       }
-      
+
       // Only proceed if we have a valid response
       if (!aiResult || !aiResult.response) {
         this.addConsoleLog("AI", "No response generated", { threadId });
         return;
       }
-      
+
       this.addConsoleLog("AI", "Received /generate result (auto)", {
         phase: aiResult.phase,
         readyForAsk: aiResult.ready_for_ask,
         knowledgeSnippets: aiResult.input?.knowledge_context?.length || 0,
       });
-      
+
       // Update phase in Supabase if it changed
       if (aiResult.phase && conversationData.phase !== aiResult.phase) {
         await this.updatePhaseInSupabase(threadId, aiResult.phase);
       }
-      
+
       // Show suggested response in the top bar (same as manual generation)
       this.setStatus("Suggested", aiResult.response);
       this.addToHistory(threadId, aiResult.response);
-      
+
       // Update phase display
       this.updatePhaseDisplay(aiResult.phase);
-      
+
       // Copy to clipboard (silently handle errors - don't show in status)
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
       if (tab && tab.url && tab.url.includes("linkedin.com/messaging")) {
         try {
           await this.aiService.injectResponse(aiResult.response, tab.id);
-          this.addConsoleLog("AI", "Auto-generated response copied to clipboard", {
-            threadId,
-            phase: aiResult.phase,
-          });
+          this.addConsoleLog(
+            "AI",
+            "Auto-generated response copied to clipboard",
+            {
+              threadId,
+              phase: aiResult.phase,
+            }
+          );
         } catch (clipboardError) {
           // Log clipboard error to console only, don't affect status
-          this.addConsoleLog("ERROR", "Failed to copy to clipboard (auto-gen)", { 
-            error: clipboardError.message,
-            threadId
-          });
+          this.addConsoleLog(
+            "ERROR",
+            "Failed to copy to clipboard (auto-gen)",
+            {
+              error: clipboardError.message,
+              threadId,
+            }
+          );
           console.error("Clipboard copy failed (auto-gen):", clipboardError);
         }
       }
-      
+
       return aiResult;
     } catch (error) {
       // Silently fail - auto-gen is optional
@@ -1524,39 +1724,56 @@ class DOMExtractor {
         return;
       const threadId = tab.url.match(/\/thread\/([^\/\?]+)/)?.[1];
       if (!threadId) return;
-      
+
       const changed = threadId && threadId !== this.lastThreadId;
-      
+
       // Only load if conversation changed
       if (!changed) return;
-      
+
       // Load existing conversation from Supabase to display in UI
       try {
         const existing = await this.supabaseService.getConversation(threadId);
         if (existing) {
           // EXISTING CONVERSATION: Re-extract from DOM to get latest messages
-          this.addConsoleLog("DB", "Existing conversation detected - re-extracting from DOM to update messages", { 
-            threadId,
-            existingMessageCount: existing.messages?.length || 0
-          });
-          
+          this.addConsoleLog(
+            "DB",
+            "Existing conversation detected - re-extracting from DOM to update messages",
+            {
+              threadId,
+              existingMessageCount: existing.messages?.length || 0,
+            }
+          );
+
           try {
             // Extract conversation from DOM (gets latest messages)
             const convo = await this.extractConversationFromActiveTab(tab.id);
-            if (convo && !convo.error && convo.messages && convo.messages.length > 0) {
+            if (
+              convo &&
+              !convo.error &&
+              convo.messages &&
+              convo.messages.length > 0
+            ) {
               // Extract placeholders from the initial message (not from profile)
-              const extractedPlaceholders = await this.extractPlaceholdersFromTemplate(convo);
-              
+              const extractedPlaceholders =
+                await this.extractPlaceholdersFromTemplate(convo);
+
               // Preserve existing title/description/url/status if they're good, but update messages and placeholders
-              const existingTitleIsClean = existing.title && 
-                !existing.title.includes("Mobile") && 
+              const existingTitleIsClean =
+                existing.title &&
+                !existing.title.includes("Mobile") &&
                 !existing.title.includes("•") &&
                 !existing.title.match(/\d+[wdhms]\s+ago/i);
-              
-              const finalTitle = (existingTitleIsClean && existing.title !== "Unknown") ? existing.title : convo.title;
-              const finalDescription = existing.description && existing.description.length > 0 ? existing.description : convo.description;
+
+              const finalTitle =
+                existingTitleIsClean && existing.title !== "Unknown"
+                  ? existing.title
+                  : convo.title;
+              const finalDescription =
+                existing.description && existing.description.length > 0
+                  ? existing.description
+                  : convo.description;
               const finalUrl = existing.url || convo.url;
-              
+
               // Update conversation with latest data (including new messages)
               await this.supabaseService.saveConversation({
                 threadId: existing.thread_id || threadId,
@@ -1567,116 +1784,146 @@ class DOMExtractor {
                 status: existing.status || "unknown",
                 placeholders: extractedPlaceholders || {},
               });
-              
+
               // Update UI with saved data
               const dataHtml = `
                 <div>Messages: ${convo.messages.length}</div>
                 <div>Updated: ${new Date().toLocaleString()}</div>
               `;
               this.updateLeadCard({
-                name: finalTitle || (extractedPlaceholders?.name) || "—",
+                name: finalTitle || extractedPlaceholders?.name || "—",
                 description: finalDescription || "",
                 dataHtml,
                 status: existing.status || "unknown",
                 placeholders: extractedPlaceholders || {},
               });
-              
+
               // Update phase display if phase exists
               if (existing.phase) {
                 this.updatePhaseDisplay(existing.phase);
               }
-              
-              this.addConsoleLog("DB", "Updated existing conversation in Supabase with latest messages", {
-                threadId,
-                messageCount: convo.messages.length,
-                previousMessageCount: existing.messages?.length || 0,
-                title: finalTitle,
-              });
+
+              this.addConsoleLog(
+                "DB",
+                "Updated existing conversation in Supabase with latest messages",
+                {
+                  threadId,
+                  messageCount: convo.messages.length,
+                  previousMessageCount: existing.messages?.length || 0,
+                  title: finalTitle,
+                }
+              );
               this.setStatus("Ready", `Updated conversation ${threadId}`);
-              
+
               // Auto-generate AI response after successful update
-              this.autoGenerateResponse(threadId).catch(err => {
+              this.autoGenerateResponse(threadId).catch((err) => {
                 // Don't show error to user - auto-gen is optional
-                this.addConsoleLog("AI", "Auto-generation failed (non-blocking)", { error: err.message });
+                this.addConsoleLog(
+                  "AI",
+                  "Auto-generation failed (non-blocking)",
+                  { error: err.message }
+                );
               });
             } else {
               // Extraction failed, just load existing data
               const dataHtml = `
                 <div>Messages: ${existing.messages?.length || 0}</div>
-                <div>Last updated: ${existing.updated_at ? new Date(existing.updated_at).toLocaleString() : '—'}</div>
+                <div>Last updated: ${
+                  existing.updated_at
+                    ? new Date(existing.updated_at).toLocaleString()
+                    : "—"
+                }</div>
               `;
               this.updateLeadCard({
-                name: existing.title || (existing.placeholders?.name) || "—",
+                name: existing.title || existing.placeholders?.name || "—",
                 description: existing.description || "",
                 dataHtml,
                 status: existing.status || "unknown",
                 placeholders: existing.placeholders || {},
               });
-              
+
               // Update phase display if phase exists
               if (existing.phase) {
                 this.updatePhaseDisplay(existing.phase);
               }
-              
-              this.addConsoleLog("DB", "Loaded conversation from Supabase (extraction failed)", { 
-                threadId,
-                error: convo?.error || "Unknown error"
-              });
+
+              this.addConsoleLog(
+                "DB",
+                "Loaded conversation from Supabase (extraction failed)",
+                {
+                  threadId,
+                  error: convo?.error || "Unknown error",
+                }
+              );
               this.setStatus("Ready", `Loaded conversation ${threadId}`);
             }
           } catch (e) {
             // If extraction fails, just load existing data
             const dataHtml = `
               <div>Messages: ${existing.messages?.length || 0}</div>
-              <div>Last updated: ${existing.updated_at ? new Date(existing.updated_at).toLocaleString() : '—'}</div>
+              <div>Last updated: ${
+                existing.updated_at
+                  ? new Date(existing.updated_at).toLocaleString()
+                  : "—"
+              }</div>
             `;
             this.updateLeadCard({
-              name: existing.title || (existing.placeholders?.name) || "—",
+              name: existing.title || existing.placeholders?.name || "—",
               description: existing.description || "",
               dataHtml,
               status: existing.status || "unknown",
               placeholders: existing.placeholders || {},
             });
-            
+
             // Update phase display if phase exists
             if (existing.phase) {
               this.updatePhaseDisplay(existing.phase);
             }
-            
+
             this.addConsoleLog("DB", "Failed to update conversation", {
               threadId,
-              error: e.message
+              error: e.message,
             });
             this.setStatus("Ready", `Loaded conversation ${threadId}`);
           }
         } else {
           // NEW CONVERSATION: Extract from DOM and save to Supabase automatically
-          this.addConsoleLog("DB", "New conversation detected - extracting from DOM and saving", { threadId });
-          
+          this.addConsoleLog(
+            "DB",
+            "New conversation detected - extracting from DOM and saving",
+            { threadId }
+          );
+
           try {
             // Extract conversation from DOM
             const convo = await this.extractConversationFromActiveTab(tab.id);
-            if (convo && !convo.error && convo.messages && convo.messages.length > 0) {
+            if (
+              convo &&
+              !convo.error &&
+              convo.messages &&
+              convo.messages.length > 0
+            ) {
               // Extract placeholders from the initial message
-              const extractedPlaceholders = await this.extractPlaceholdersFromTemplate(convo);
+              const extractedPlaceholders =
+                await this.extractPlaceholdersFromTemplate(convo);
               convo.placeholders = extractedPlaceholders || {};
-              
+
               // Save to Supabase
               await this.persistConversation(convo);
-              
+
               // Update UI with saved data
               const dataHtml = `
                 <div>Messages: ${convo.messages.length}</div>
                 <div>Saved: ${new Date().toLocaleString()}</div>
               `;
               this.updateLeadCard({
-                name: convo.title || (convo.placeholders?.name) || "—",
+                name: convo.title || convo.placeholders?.name || "—",
                 description: convo.description || "",
                 dataHtml,
                 status: "unknown",
                 placeholders: convo.placeholders || {},
               });
-              
+
               this.addConsoleLog("DB", "Saved new conversation to Supabase", {
                 threadId,
                 messageCount: convo.messages.length,
@@ -1685,36 +1932,50 @@ class DOMExtractor {
                 placeholders: convo.placeholders,
               });
               this.setStatus("Ready", `Saved new conversation ${threadId}`);
-              
+
               // Auto-generate AI response after successful save
-              this.autoGenerateResponse(threadId).catch(err => {
+              this.autoGenerateResponse(threadId).catch((err) => {
                 // Don't show error to user - auto-gen is optional
-                this.addConsoleLog("AI", "Auto-generation failed (non-blocking)", { error: err.message });
+                this.addConsoleLog(
+                  "AI",
+                  "Auto-generation failed (non-blocking)",
+                  { error: err.message }
+                );
               });
             } else {
               // Extraction failed or no messages
               this.updateLeadCard({
                 name: "—",
                 description: "",
-                dataHtml: "<div>Could not extract conversation. Make sure you're on a LinkedIn message thread.</div>",
+                dataHtml:
+                  "<div>Could not extract conversation. Make sure you're on a LinkedIn message thread.</div>",
                 status: "unknown",
                 placeholders: {},
               });
-              this.addConsoleLog("DB", "Failed to extract conversation from DOM", {
-                threadId,
-                error: convo?.error || "No messages found",
-              });
+              this.addConsoleLog(
+                "DB",
+                "Failed to extract conversation from DOM",
+                {
+                  threadId,
+                  error: convo?.error || "No messages found",
+                }
+              );
               this.setStatus("Error", "Could not extract conversation");
             }
           } catch (error) {
-            this.addConsoleLog("DB", "Error extracting and saving new conversation", {
-              error: error.message,
-              threadId,
-            });
+            this.addConsoleLog(
+              "DB",
+              "Error extracting and saving new conversation",
+              {
+                error: error.message,
+                threadId,
+              }
+            );
             this.updateLeadCard({
               name: "—",
               description: "",
-              dataHtml: "<div>Error saving conversation. Click 'Update Cloud' to retry.</div>",
+              dataHtml:
+                "<div>Error saving conversation. Click 'Update Cloud' to retry.</div>",
               status: "unknown",
               placeholders: {},
             });
@@ -1723,7 +1984,7 @@ class DOMExtractor {
         }
         this.lastThreadId = threadId;
       } catch (e) {
-        this.addConsoleLog("DB", "Failed to load conversation", { 
+        this.addConsoleLog("DB", "Failed to load conversation", {
           error: e.message,
           threadId,
         });
@@ -1754,45 +2015,57 @@ class DOMExtractor {
       ) {
         throw new Error("Open a LinkedIn conversation thread first");
       }
-      const convo = await this.extractConversationFromActiveTab(tab.id);
+      // CRITICAL FIX: Pass force=true to bypass duplicate prevention when manually updating
+      const convo = await this.extractConversationFromActiveTab(tab.id, true);
       if (convo && !convo.error) {
         // Get existing conversation to preserve existing placeholders
-        const existing = await this.supabaseService.getConversation(convo.threadId);
+        const existing = await this.supabaseService.getConversation(
+          convo.threadId
+        );
         const existingPlaceholders = existing?.placeholders || {};
-        
+
         // Extract placeholders from the actual initial message ONLY (not from profile)
         // Use the conversation that has the messages (prefer existing from Supabase if available, otherwise use newly extracted)
-        let conversationForExtraction = existing && existing.messages && existing.messages.length > 0 ? existing : convo;
-        const extractedPlaceholders = await this.extractPlaceholdersFromTemplate(conversationForExtraction);
-        
+        let conversationForExtraction =
+          existing && existing.messages && existing.messages.length > 0
+            ? existing
+            : convo;
+        const extractedPlaceholders =
+          await this.extractPlaceholdersFromTemplate(conversationForExtraction);
+
         // Use ONLY extracted placeholders from the message - don't merge with profile data
         // This ensures we get exact values like "Ari" not "Ari Zhang", "dvhs" not "Dougherty Valley High School"
         convo.placeholders = extractedPlaceholders || {};
-        
+
         // IMPORTANT: When updating, preserve existing title/description/url if they exist and are good
         // Only update if the new extracted data is better (not corrupted with status indicators)
         // But always update placeholders from message
         if (existing) {
           // Keep existing title/description if they don't contain status indicators
           // (existing ones were probably cleaned properly when first saved)
-          const existingTitleIsClean = existing.title && 
-            !existing.title.includes("Mobile") && 
+          const existingTitleIsClean =
+            existing.title &&
+            !existing.title.includes("Mobile") &&
             !existing.title.includes("•") &&
             !existing.title.match(/\d+[wdhms]\s+ago/i);
-          
+
           if (existingTitleIsClean && existing.title !== "Unknown") {
             convo.title = existing.title;
           }
-          
+
           if (existing.description && existing.description.length > 0) {
             convo.description = existing.description;
           }
-          
+
           if (existing.url) {
             convo.url = existing.url;
           }
         }
-        
+
+        // CRITICAL FIX: Set forceReplace flag to replace all messages when manually updating
+        // This prevents mixing messages from different conversations
+        convo.forceReplace = true;
+
         this.addConsoleLog("DB", "Manual update triggered", {
           threadId: convo.threadId,
           extracted: extractedPlaceholders,
@@ -1800,8 +2073,9 @@ class DOMExtractor {
           description: convo.description,
           url: convo.url,
           messageCount: convo.messages?.length || 0,
+          forceReplace: true,
         });
-        
+
         try {
           await this.persistConversation(convo);
           this.addConsoleLog("DB", "Manual update successful", {
@@ -1814,7 +2088,7 @@ class DOMExtractor {
           });
           throw saveError; // Re-throw to be caught by outer catch
         }
-        
+
         // Update UI with saved data
         const dataHtml = `
           <div>Messages: ${convo.messages.length}</div>
@@ -1822,8 +2096,9 @@ class DOMExtractor {
             convo.extractedAt || Date.now()
           ).toLocaleString()}</div>
         `;
-        const displayName = convo.title || (convo.placeholders?.name) || "—";
-        const displayDescription = convo.description || "No description available";
+        const displayName = convo.title || convo.placeholders?.name || "—";
+        const displayDescription =
+          convo.description || "No description available";
         this.updateLeadCard({
           name: displayName,
           description: displayDescription,
@@ -1831,7 +2106,7 @@ class DOMExtractor {
           status: convo.status || existing?.status || "unknown",
           placeholders: convo.placeholders || {},
         });
-        
+
         this.setStatus("Synced", `Conversation ${convo.threadId} updated`);
         if (btn) btn.textContent = "✅ Updated";
         this.lastThreadId = convo.threadId;
@@ -1869,21 +2144,26 @@ class DOMExtractor {
       });
       return;
     }
-    
+
     // Check if last message was sent by "you" - if so, skip auto-generation (wait for prospect response)
     const messages = convo.messages || [];
     if (messages.length > 0) {
       const lastMessage = messages[messages.length - 1];
-      const lastSender = lastMessage.sender || (lastMessage.isFromYou ? "you" : "prospect");
+      const lastSender =
+        lastMessage.sender || (lastMessage.isFromYou ? "you" : "prospect");
       if (lastSender === "you") {
-        this.addConsoleLog("AI", "Skipping auto-gen - last message was sent by you, waiting for prospect response", { 
-          threadId,
-          lastMessageIndex: messages.length - 1
-        });
+        this.addConsoleLog(
+          "AI",
+          "Skipping auto-gen - last message was sent by you, waiting for prospect response",
+          {
+            threadId,
+            lastMessageIndex: messages.length - 1,
+          }
+        );
         return;
       }
     }
-    
+
     // Update lead card with status if available
     if (convo.status) {
       this.updateLeadCard({
@@ -1896,7 +2176,7 @@ class DOMExtractor {
       convo,
       convo.prospectName || convo.title || ""
     );
-    
+
     // Handle approval required - show dialog even for auto-generate
     if (aiResult.status === "approval_required") {
       this.setStatus("Waiting", "Approval required for phase transition...");
@@ -1904,12 +2184,14 @@ class DOMExtractor {
         aiResult.reasoning,
         aiResult.suggested_phase
       );
-      
+
       // Update phase in Supabase based on decision
       if (approved) {
         await this.updatePhaseInSupabase(threadId, "doing_the_ask");
         // Re-call with approval
-        const convoUpdated = await this.supabaseService.getConversation(threadId);
+        const convoUpdated = await this.supabaseService.getConversation(
+          threadId
+        );
         convoUpdated.confirm_phase_change = true;
         aiResult = await this.aiService.generateResponse(
           convoUpdated,
@@ -1918,7 +2200,9 @@ class DOMExtractor {
       } else {
         await this.updatePhaseInSupabase(threadId, "building_rapport");
         // Re-call with rejection
-        const convoUpdated = await this.supabaseService.getConversation(threadId);
+        const convoUpdated = await this.supabaseService.getConversation(
+          threadId
+        );
         convoUpdated.confirm_phase_change = false;
         aiResult = await this.aiService.generateResponse(
           convoUpdated,
@@ -1926,13 +2210,13 @@ class DOMExtractor {
         );
       }
     }
-    
+
     // Only proceed if we have a valid response
     if (!aiResult || !aiResult.response) {
       this.addConsoleLog("AI", "No response generated", { threadId });
       return;
     }
-    
+
     this.addConsoleLog("AI", "Generated", { phase: aiResult.phase });
 
     // Copy to clipboard (user will paste manually)
@@ -1944,25 +2228,25 @@ class DOMExtractor {
       this.addConsoleLog("AI", "Copy skipped (not on messaging page)", {});
       return;
     }
-      // Show suggested response in the top bar and add to history
-      this.setStatus("Suggested", aiResult.response);
-      this.addToHistory(threadId, aiResult.response);
-      
-      // Update phase display
-      this.updatePhaseDisplay(aiResult.phase);
-      
-      // Copy to clipboard (silently handle errors - don't show in status)
-      try {
-        await this.aiService.injectResponse(aiResult.response, tab.id);
-        this.addConsoleLog("AI", "Response copied to clipboard", { threadId });
-      } catch (clipboardError) {
-        // Log clipboard error to console only, don't affect status
-        this.addConsoleLog("ERROR", "Failed to copy to clipboard", { 
-          error: clipboardError.message,
-          threadId
-        });
-        console.error("Clipboard copy failed:", clipboardError);
-      }
+    // Show suggested response in the top bar and add to history
+    this.setStatus("Suggested", aiResult.response);
+    this.addToHistory(threadId, aiResult.response);
+
+    // Update phase display
+    this.updatePhaseDisplay(aiResult.phase);
+
+    // Copy to clipboard (silently handle errors - don't show in status)
+    try {
+      await this.aiService.injectResponse(aiResult.response, tab.id);
+      this.addConsoleLog("AI", "Response copied to clipboard", { threadId });
+    } catch (clipboardError) {
+      // Log clipboard error to console only, don't affect status
+      this.addConsoleLog("ERROR", "Failed to copy to clipboard", {
+        error: clipboardError.message,
+        threadId,
+      });
+      console.error("Clipboard copy failed:", clipboardError);
+    }
   }
 
   // ===== Response History =====
@@ -1993,7 +2277,7 @@ class DOMExtractor {
       }`;
     const prevBtn = document.getElementById("prevRespBtn");
     const nextBtn = document.getElementById("nextRespBtn");
-    
+
     // Only enable buttons if multiple responses exist
     const hasMultiple = hist.items.length > 1;
     if (prevBtn) {
@@ -2035,8 +2319,7 @@ class DOMExtractor {
     return match ? match[1] : null;
   }
 
-
-  async extractConversationFromActiveTab(tabId) {
+  async extractConversationFromActiveTab(tabId, force = false) {
     // Use message passing to content script instead of script injection
     try {
       // Check if content script is loaded by trying to send a message
@@ -2044,37 +2327,45 @@ class DOMExtractor {
       let domData;
       try {
         domData = await chrome.tabs.sendMessage(tabId, {
-          action: 'extractConversation',
-          force: false
+          action: "extractConversation",
+          force: force,
         });
       } catch (messageError) {
         // Content script might not be loaded - try to inject it
         const errorStr = String(messageError.message || messageError);
-        if (errorStr.includes("Receiving end does not exist") || errorStr.includes("Could not establish connection")) {
-          this.addConsoleLog("EXTRACTION", "Content script not loaded, injecting...", {
-            tabId: tabId
-          });
-          
+        if (
+          errorStr.includes("Receiving end does not exist") ||
+          errorStr.includes("Could not establish connection")
+        ) {
+          this.addConsoleLog(
+            "EXTRACTION",
+            "Content script not loaded, injecting...",
+            {
+              tabId: tabId,
+            }
+          );
+
           try {
             // Inject content script manually
             await chrome.scripting.executeScript({
               target: { tabId: tabId },
-              files: ['content-script.js']
+              files: ["content-script.js"],
             });
-            
+
             // Wait for script to initialize and DOM to be ready
             // Give LinkedIn time to render the conversation UI
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+
             // Try again
             domData = await chrome.tabs.sendMessage(tabId, {
-              action: 'extractConversation',
-              force: false
+              action: "extractConversation",
+              force: force,
             });
           } catch (injectError) {
             // If injection also fails, return helpful error
-            return { 
-              error: "Failed to load content script. Please refresh the LinkedIn page and try again." 
+            return {
+              error:
+                "Failed to load content script. Please refresh the LinkedIn page and try again.",
             };
           }
         } else {
@@ -2090,14 +2381,18 @@ class DOMExtractor {
     } catch (error) {
       console.error("Error extracting conversation:", error);
       const errorMsg = error.message || "Failed to extract conversation";
-      
+
       // Provide helpful error message
-      if (errorMsg.includes("Receiving end does not exist") || errorMsg.includes("Could not establish connection")) {
-        return { 
-          error: "Content script not loaded. Please refresh the LinkedIn page and try again." 
+      if (
+        errorMsg.includes("Receiving end does not exist") ||
+        errorMsg.includes("Could not establish connection")
+      ) {
+        return {
+          error:
+            "Content script not loaded. Please refresh the LinkedIn page and try again.",
         };
       }
-      
+
       return { error: errorMsg };
     }
   }
@@ -2311,7 +2606,11 @@ class DOMExtractor {
         let nameElement = null;
         for (const selector of nameSelectors) {
           nameElement = activeConversationThread.querySelector(selector);
-          if (nameElement && nameElement.textContent && nameElement.textContent.trim()) {
+          if (
+            nameElement &&
+            nameElement.textContent &&
+            nameElement.textContent.trim()
+          ) {
             // Found a name element - use it directly (it's already isolated from status)
             prospectName = nameElement.textContent.trim();
             break;
@@ -2323,17 +2622,20 @@ class DOMExtractor {
           const profileLink = activeConversationThread.querySelector(
             ".msg-thread__link-to-profile"
           );
-          
+
           if (profileLink) {
             // Look for the entity lockup structure
-            const entityLockup = profileLink.querySelector(".msg-entity-lockup");
+            const entityLockup =
+              profileLink.querySelector(".msg-entity-lockup");
             if (entityLockup) {
-              const titleEl = entityLockup.querySelector(".msg-entity-lockup__entity-title, h2");
+              const titleEl = entityLockup.querySelector(
+                ".msg-entity-lockup__entity-title, h2"
+              );
               if (titleEl && titleEl.textContent) {
                 prospectName = titleEl.textContent.trim();
               }
             }
-            
+
             // Last resort: look for h2 or first meaningful text node
             if (prospectName === "Unknown") {
               const h2El = profileLink.querySelector("h2");
@@ -2345,7 +2647,10 @@ class DOMExtractor {
                 if (directNameChild && directNameChild.textContent) {
                   const text = directNameChild.textContent.trim();
                   // Filter out if it contains status indicators
-                  if (!text.match(/Status|Mobile|ago|•/i) && !text.match(/\d+[wdhms]/)) {
+                  if (
+                    !text.match(/Status|Mobile|ago|•/i) &&
+                    !text.match(/\d+[wdhms]/)
+                  ) {
                     prospectName = text;
                   }
                 }
@@ -2360,14 +2665,14 @@ class DOMExtractor {
         // Extract title/description from SEPARATE entity-info element (not from name element)
         // Based on DOM: title is in .msg-entity-lockup__entity-info, separate from name
         const headlineSelectors = [
-          '.msg-entity-lockup__entity-info', // Main title/description element - MOST RELIABLE
-          '.msg-entity-lockup__presence-status', // Status container (contains title)
-          '.msg-s-profile-card__headline',
-          '.msg-thread__headline',
+          ".msg-entity-lockup__entity-info", // Main title/description element - MOST RELIABLE
+          ".msg-entity-lockup__presence-status", // Status container (contains title)
+          ".msg-s-profile-card__headline",
+          ".msg-thread__headline",
           '[data-test-id="headline"]',
-          '.artdeco-entity-lockup__subtitle',
-          '.artdeco-entity-lockup__subtitle div[title]',
-          '.artdeco-entity-lockup__subtitle[title]',
+          ".artdeco-entity-lockup__subtitle",
+          ".artdeco-entity-lockup__subtitle div[title]",
+          ".artdeco-entity-lockup__subtitle[title]",
         ];
 
         for (const selector of headlineSelectors) {
@@ -2376,23 +2681,31 @@ class DOMExtractor {
             // Get text but exclude visually-hidden status text
             let headlineText = "";
             const allTextNodes = [];
-            headlineEl.childNodes.forEach(node => {
+            headlineEl.childNodes.forEach((node) => {
               // Skip visually-hidden elements (they contain status)
               if (node.nodeType === Node.TEXT_NODE) {
                 allTextNodes.push(node.textContent);
-              } else if (node.nodeType === Node.ELEMENT_NODE && 
-                         !node.classList.contains('visually-hidden') &&
-                         !node.classList.contains('msg-entity-lockup__presence-indicator')) {
+              } else if (
+                node.nodeType === Node.ELEMENT_NODE &&
+                !node.classList.contains("visually-hidden") &&
+                !node.classList.contains(
+                  "msg-entity-lockup__presence-indicator"
+                )
+              ) {
                 // Get text from non-hidden elements
-                const text = node.textContent || node.getAttribute("title") || "";
+                const text =
+                  node.textContent || node.getAttribute("title") || "";
                 if (text.trim()) {
                   allTextNodes.push(text);
                 }
               }
             });
-            
-            headlineText = allTextNodes.join(" ").trim() || headlineEl.getAttribute("title") || "";
-            
+
+            headlineText =
+              allTextNodes.join(" ").trim() ||
+              headlineEl.getAttribute("title") ||
+              "";
+
             if (headlineText.trim()) {
               prospectDescription = clean(headlineText);
               prospectTitle = prospectDescription;
@@ -2429,25 +2742,31 @@ class DOMExtractor {
    */
   async extractPlaceholdersFromTemplate(conversation) {
     const placeholders = {};
-    
+
     try {
       // Get the template from the backend
       let template = "";
       try {
-        const templateResponse = await this.aiService.getInitialMessageTemplate();
+        const templateResponse =
+          await this.aiService.getInitialMessageTemplate();
         template = templateResponse.template || "";
         this.addConsoleLog("PLACEHOLDERS", "Loaded template from backend", {
           template: template.substring(0, 100) + "...",
-          templateLength: template.length
+          templateLength: template.length,
         });
       } catch (error) {
-        this.addConsoleLog("PLACEHOLDERS", "Failed to load template, using fallback", {
-          error: error.message
-        });
+        this.addConsoleLog(
+          "PLACEHOLDERS",
+          "Failed to load template, using fallback",
+          {
+            error: error.message,
+          }
+        );
         // Fallback template
-        template = "hey {name}, I'm currently researching what students at {school} are working on outside of school, like nonprofits, research, internships, or passion projects. Are you working on any great projects or ideas?";
+        template =
+          "hey {name}, I'm currently researching what students at {school} are working on outside of school, like nonprofits, research, internships, or passion projects. Are you working on any great projects or ideas?";
       }
-      
+
       // Get the FIRST message (index 0) from the conversation messages
       // The user confirmed this is the initial message
       const messages = conversation.messages || [];
@@ -2459,46 +2778,56 @@ class DOMExtractor {
           their_idea_pain_vision: null,
         };
       }
-      
+
       // Get message at index 0 (first message)
       // Sort messages by index to ensure we get index 0
-      const sortedMessages = [...messages].sort((a, b) => (a.index || 0) - (b.index || 0));
+      const sortedMessages = [...messages].sort(
+        (a, b) => (a.index || 0) - (b.index || 0)
+      );
       const firstMessage = sortedMessages[0];
-      
+
       // Verify it's from "you" (should always be for initial messages)
       const sender = firstMessage.sender || "";
       const isFromYou = firstMessage.isFromYou === true || sender === "you";
-      
+
       if (!isFromYou) {
-        this.addConsoleLog("PLACEHOLDERS", "First message (index 0) is not from 'you'", {
-          sender: sender,
-          isFromYou: firstMessage.isFromYou,
-          messageIndex: firstMessage.index,
-          messagePreview: firstMessage.text?.substring(0, 50) || "no text"
-        });
+        this.addConsoleLog(
+          "PLACEHOLDERS",
+          "First message (index 0) is not from 'you'",
+          {
+            sender: sender,
+            isFromYou: firstMessage.isFromYou,
+            messageIndex: firstMessage.index,
+            messagePreview: firstMessage.text?.substring(0, 50) || "no text",
+          }
+        );
         // Still try to extract from it if it exists, but log a warning
       }
-      
+
       if (!firstMessage || !firstMessage.text) {
-        this.addConsoleLog("PLACEHOLDERS", "No text in first message (index 0)", {
-          messageIndex: firstMessage?.index,
-          hasMessage: !!firstMessage
-        });
+        this.addConsoleLog(
+          "PLACEHOLDERS",
+          "No text in first message (index 0)",
+          {
+            messageIndex: firstMessage?.index,
+            hasMessage: !!firstMessage,
+          }
+        );
         return {
           name: null,
           school: null,
           their_idea_pain_vision: null,
         };
       }
-      
+
       const actualMessage = firstMessage.text.trim();
       this.addConsoleLog("PLACEHOLDERS", "Extracting from message at index 0", {
         messageIndex: firstMessage.index,
         sender: sender,
         messagePreview: actualMessage.substring(0, 200),
-        templatePreview: template.substring(0, 100) + "..."
+        templatePreview: template.substring(0, 100) + "...",
       });
-      
+
       // Extract name by comparing template and actual message
       // Template: "hey {name}," or "Hi {name},"
       // Actual: "Hi Ashaaz," or "hey Rohan,"
@@ -2506,27 +2835,34 @@ class DOMExtractor {
       const templateNamePattern = /\{name\}/i;
       if (templateNamePattern.test(template)) {
         // Find where {name} appears in template (after greeting)
-        const templateBeforeName = template.substring(0, template.indexOf("{name}"));
-        const templateAfterName = template.substring(template.indexOf("{name}") + "{name}".length);
-        
+        const templateBeforeName = template.substring(
+          0,
+          template.indexOf("{name}")
+        );
+        const templateAfterName = template.substring(
+          template.indexOf("{name}") + "{name}".length
+        );
+
         // Extract greeting pattern from template (e.g., "hey ", "Hi ")
         const greetingMatch = templateBeforeName.match(/(?:hey|hi|hello)\s+/i);
         if (greetingMatch) {
           // Find the same greeting in actual message
           const greeting = greetingMatch[0];
-          const greetingIndex = actualMessage.toLowerCase().indexOf(greeting.toLowerCase());
-          
+          const greetingIndex = actualMessage
+            .toLowerCase()
+            .indexOf(greeting.toLowerCase());
+
           if (greetingIndex !== -1) {
             // Extract text after greeting, up to the next punctuation or template pattern
             const nameStart = greetingIndex + greeting.length;
             // Find where name ends - look for comma, period, or space before next word
             const nameEndPatterns = [
-              /[,\.!?\n]/,  // Punctuation
-              /\s+my\s+/i,  // Space before "my"
-              /\s+I'?m\s+/i,  // Space before "I'm"
-              /\s+the\s+/i,  // Space before "the"
+              /[,\.!?\n]/, // Punctuation
+              /\s+my\s+/i, // Space before "my"
+              /\s+I'?m\s+/i, // Space before "I'm"
+              /\s+the\s+/i, // Space before "the"
             ];
-            
+
             let nameEnd = actualMessage.length;
             for (const pattern of nameEndPatterns) {
               const match = actualMessage.substring(nameStart).match(pattern);
@@ -2534,31 +2870,35 @@ class DOMExtractor {
                 nameEnd = Math.min(nameEnd, nameStart + match.index);
               }
             }
-            
+
             if (nameEnd > nameStart) {
               let name = actualMessage.substring(nameStart, nameEnd).trim();
               // Remove trailing punctuation
               name = name.replace(/[,\.!?;:]+$/, "").trim();
               if (name.length > 0 && name.length <= 50) {
                 placeholders.name = name;
-                this.addConsoleLog("PLACEHOLDERS", "Extracted name from template comparison", {
-                  name: name,
-                  greeting: greeting,
-                  nameStart: nameStart,
-                  nameEnd: nameEnd
-                });
+                this.addConsoleLog(
+                  "PLACEHOLDERS",
+                  "Extracted name from template comparison",
+                  {
+                    name: name,
+                    greeting: greeting,
+                    nameStart: nameStart,
+                    nameEnd: nameEnd,
+                  }
+                );
               }
             }
           }
         }
-        
+
         // Fallback: if template comparison didn't work, try regex
         if (!placeholders.name) {
           const namePatterns = [
             /^(?:hi|hey|hello)\s+([^,\.!?\n]+?)[,\.!?\n]/i,
             /^(?:hi|hey|hello)\s+([A-Z][a-z]+)(?:\s|,|\.|$)/i,
           ];
-          
+
           for (const pattern of namePatterns) {
             const match = actualMessage.match(pattern);
             if (match && match[1]) {
@@ -2572,7 +2912,7 @@ class DOMExtractor {
           }
         }
       }
-      
+
       // Extract school by comparing template and actual message
       // Template has: "students at {school}" OR might have "attended {school}"
       // Actual message: "attended tino" or "students at valley christian"
@@ -2580,95 +2920,128 @@ class DOMExtractor {
       if (templateSchoolPattern.test(template)) {
         // Template might have: "students at {school}" or variations
         // Actual message might have: "attended tino" or "students at valley christian"
-        
+
         // Try to find "attended {school}" pattern first (most common in actual messages)
-        const attendedPattern = /(?:friend|close friend|buddy|pal|colleague)\s+(?:who\s+)?(?:attended|went to)\s+([A-Za-z0-9\s]{1,40})(?:\s+(?:told|pointed|said|mentioned|shared|me|about)|[,\.!?]|$)/i;
+        const attendedPattern =
+          /(?:friend|close friend|buddy|pal|colleague)\s+(?:who\s+)?(?:attended|went to)\s+([A-Za-z0-9\s]{1,40})(?:\s+(?:told|pointed|said|mentioned|shared|me|about)|[,\.!?]|$)/i;
         const attendedMatch = actualMessage.match(attendedPattern);
-        
+
         if (attendedMatch && attendedMatch[1]) {
           let school = attendedMatch[1].trim();
           school = school.replace(/[.,!?;:]+$/, "").trim();
           school = school.replace(/\s+/g, " ").trim();
-          
+
           // Filter out false positives
-          if (school.length >= 2 && 
-              school.length <= 50 &&
-              !school.match(/^(the|a|an|and|or|at|from|are|were|used|to|told|said|mentioned|students|friend|who|attended|went|my|close|cool|things|build|there|nonprofits|projects|research|internships|ideas|passion|even|me|about)$/i)) {
+          if (
+            school.length >= 2 &&
+            school.length <= 50 &&
+            !school.match(
+              /^(the|a|an|and|or|at|from|are|were|used|to|told|said|mentioned|students|friend|who|attended|went|my|close|cool|things|build|there|nonprofits|projects|research|internships|ideas|passion|even|me|about)$/i
+            )
+          ) {
             placeholders.school = school.toLowerCase();
-            this.addConsoleLog("PLACEHOLDERS", "Extracted school from 'attended' pattern", {
-              school: placeholders.school,
-              match: attendedMatch[0]
-            });
+            this.addConsoleLog(
+              "PLACEHOLDERS",
+              "Extracted school from 'attended' pattern",
+              {
+                school: placeholders.school,
+                match: attendedMatch[0],
+              }
+            );
           }
         }
-        
+
         // If not found, try "students at {school}" pattern (from template)
         if (!placeholders.school) {
-          const studentsAtPattern = /students\s+(?:at|from)\s+([A-Za-z0-9\s&'\-\.]{1,50}?)(?:\s+(?:are|used to|were|used|build|working|used to build)|[,\.!?]|$)/i;
+          const studentsAtPattern =
+            /students\s+(?:at|from)\s+([A-Za-z0-9\s&'\-\.]{1,50}?)(?:\s+(?:are|used to|were|used|build|working|used to build)|[,\.!?]|$)/i;
           const studentsAtMatch = actualMessage.match(studentsAtPattern);
-          
+
           if (studentsAtMatch && studentsAtMatch[1]) {
             let school = studentsAtMatch[1].trim();
             school = school.replace(/[.,!?;:]+$/, "").trim();
             school = school.replace(/\s+/g, " ").trim();
-            
-            if (school.length >= 2 && 
-                school.length <= 50 &&
-                !school.match(/^(the|a|an|and|or|at|from|are|were|used|to|told|said|mentioned|students|friend|who|attended|went|my|close|cool|things|build|there|nonprofits|projects|research|internships|ideas|passion|even)$/i)) {
+
+            if (
+              school.length >= 2 &&
+              school.length <= 50 &&
+              !school.match(
+                /^(the|a|an|and|or|at|from|are|were|used|to|told|said|mentioned|students|friend|who|attended|went|my|close|cool|things|build|there|nonprofits|projects|research|internships|ideas|passion|even)$/i
+              )
+            ) {
               placeholders.school = school.toLowerCase();
-              this.addConsoleLog("PLACEHOLDERS", "Extracted school from 'students at' pattern", {
-                school: placeholders.school,
-                match: studentsAtMatch[0]
-              });
+              this.addConsoleLog(
+                "PLACEHOLDERS",
+                "Extracted school from 'students at' pattern",
+                {
+                  school: placeholders.school,
+                  match: studentsAtMatch[0],
+                }
+              );
             }
           }
         }
-        
+
         // If still not found, try simpler "attended {school}" pattern
         if (!placeholders.school) {
-          const simpleAttendedPattern = /(?:attended|went to)\s+([A-Za-z0-9\s]{1,40})(?:\s+(?:told|pointed|said|mentioned|shared|me|about)|[,\.!?]|$)/i;
+          const simpleAttendedPattern =
+            /(?:attended|went to)\s+([A-Za-z0-9\s]{1,40})(?:\s+(?:told|pointed|said|mentioned|shared|me|about)|[,\.!?]|$)/i;
           const simpleMatch = actualMessage.match(simpleAttendedPattern);
-          
+
           if (simpleMatch && simpleMatch[1]) {
             let school = simpleMatch[1].trim();
             school = school.replace(/[.,!?;:]+$/, "").trim();
             school = school.replace(/\s+/g, " ").trim();
-            
-            if (school.length >= 2 && 
-                school.length <= 50 &&
-                !school.match(/^(the|a|an|and|or|at|from|are|were|used|to|told|said|mentioned|students|friend|who|attended|went|my|close|cool|things|build|there|nonprofits|projects|research|internships|ideas|passion|even|me|about)$/i)) {
+
+            if (
+              school.length >= 2 &&
+              school.length <= 50 &&
+              !school.match(
+                /^(the|a|an|and|or|at|from|are|were|used|to|told|said|mentioned|students|friend|who|attended|went|my|close|cool|things|build|there|nonprofits|projects|research|internships|ideas|passion|even|me|about)$/i
+              )
+            ) {
               placeholders.school = school.toLowerCase();
-              this.addConsoleLog("PLACEHOLDERS", "Extracted school from simple 'attended' pattern", {
-                school: placeholders.school,
-                match: simpleMatch[0]
-              });
+              this.addConsoleLog(
+                "PLACEHOLDERS",
+                "Extracted school from simple 'attended' pattern",
+                {
+                  school: placeholders.school,
+                  match: simpleMatch[0],
+                }
+              );
             }
           }
         }
       }
-      
+
       // DEBUG: Log extraction results
-      this.addConsoleLog("PLACEHOLDERS", "=== TEMPLATE COMPARISON EXTRACTION ===", {
-        messageIndex: firstMessage.index,
-        template: template.substring(0, 100) + "...",
-        actualMessage: actualMessage.substring(0, 200),
-        extractedName: placeholders.name || "(NOT FOUND)",
-        extractedSchool: placeholders.school || "(NOT FOUND)",
-      });
-      
+      this.addConsoleLog(
+        "PLACEHOLDERS",
+        "=== TEMPLATE COMPARISON EXTRACTION ===",
+        {
+          messageIndex: firstMessage.index,
+          template: template.substring(0, 100) + "...",
+          actualMessage: actualMessage.substring(0, 200),
+          extractedName: placeholders.name || "(NOT FOUND)",
+          extractedSchool: placeholders.school || "(NOT FOUND)",
+        }
+      );
+
       // Extract their_idea_pain_vision from PROSPECT messages (what they're working on)
       // Look for messages where the prospect talks about their project, idea, passion, or vision
       const prospectMessages = (conversation.messages || [])
-        .filter(m => {
+        .filter((m) => {
           const sender = m.sender || "";
-          return sender === "prospect" || (sender !== "you" && m.isFromYou === false);
+          return (
+            sender === "prospect" || (sender !== "you" && m.isFromYou === false)
+          );
         })
-        .map(m => m.text || "")
-        .filter(text => text.trim().length > 0);
-      
+        .map((m) => m.text || "")
+        .filter((text) => text.trim().length > 0);
+
       if (prospectMessages.length > 0) {
         const prospectText = prospectMessages.join(" ").toLowerCase();
-        
+
         // Try to extract key information about their project/idea/passion
         const ideaPatterns = [
           // "I'm working on X" or "working on X"
@@ -2680,7 +3053,7 @@ class DOMExtractor {
           // Direct mentions: "X is my project" or "X is what I'm working on"
           /(.+?)\s+(?:is|are)\s+(?:my|what i'?m)\s+(?:project|idea|startup|nonprofit|initiative|passion)/gi,
         ];
-        
+
         let extractedIdea = null;
         for (const pattern of ideaPatterns) {
           const matches = Array.from(prospectText.matchAll(pattern));
@@ -2693,40 +3066,62 @@ class DOMExtractor {
               idea = idea.replace(/[.,!?;:]+$/, "").trim();
               // Limit length
               if (idea.length > 10 && idea.length < 200) {
-                extractedIdea = idea.length > 100 ? idea.substring(0, 100) + "..." : idea;
-                this.addConsoleLog("PLACEHOLDERS", "Found idea/vision in prospect messages", {
-                  idea: extractedIdea,
-                  pattern: pattern.toString(),
-                  match: match[0],
-                  prospectMessageCount: prospectMessages.length
-                });
+                extractedIdea =
+                  idea.length > 100 ? idea.substring(0, 100) + "..." : idea;
+                this.addConsoleLog(
+                  "PLACEHOLDERS",
+                  "Found idea/vision in prospect messages",
+                  {
+                    idea: extractedIdea,
+                    pattern: pattern.toString(),
+                    match: match[0],
+                    prospectMessageCount: prospectMessages.length,
+                  }
+                );
                 break;
               }
             }
           }
           if (extractedIdea) break;
         }
-        
+
         // If we didn't find a specific pattern, try to extract from longer prospect responses
         // Look for sentences that mention projects, ideas, or work
         if (!extractedIdea) {
           for (const msg of prospectMessages) {
             const msgLower = msg.toLowerCase();
             // Check if message mentions project-related keywords
-            if (msgLower.match(/(?:project|idea|startup|nonprofit|initiative|working on|building|creating)/i)) {
+            if (
+              msgLower.match(
+                /(?:project|idea|startup|nonprofit|initiative|working on|building|creating)/i
+              )
+            ) {
               // Extract first substantial sentence that mentions these keywords
-              const sentences = msg.split(/[.!?]+/).filter(s => s.trim().length > 20);
+              const sentences = msg
+                .split(/[.!?]+/)
+                .filter((s) => s.trim().length > 20);
               for (const sentence of sentences) {
                 const sentLower = sentence.toLowerCase();
-                if (sentLower.match(/(?:project|idea|startup|nonprofit|initiative|working on|building|creating)/i)) {
+                if (
+                  sentLower.match(
+                    /(?:project|idea|startup|nonprofit|initiative|working on|building|creating)/i
+                  )
+                ) {
                   let idea = sentence.trim();
-                  idea = idea.replace(/^(that|this|it|a|an|the)\s+/i, "").trim();
+                  idea = idea
+                    .replace(/^(that|this|it|a|an|the)\s+/i, "")
+                    .trim();
                   if (idea.length > 20 && idea.length < 200) {
-                    extractedIdea = idea.length > 100 ? idea.substring(0, 100) + "..." : idea;
-                    this.addConsoleLog("PLACEHOLDERS", "Found idea/vision in prospect message sentence", {
-                      idea: extractedIdea,
-                      sentence: sentence.substring(0, 100)
-                    });
+                    extractedIdea =
+                      idea.length > 100 ? idea.substring(0, 100) + "..." : idea;
+                    this.addConsoleLog(
+                      "PLACEHOLDERS",
+                      "Found idea/vision in prospect message sentence",
+                      {
+                        idea: extractedIdea,
+                        sentence: sentence.substring(0, 100),
+                      }
+                    );
                     break;
                   }
                 }
@@ -2735,24 +3130,23 @@ class DOMExtractor {
             }
           }
         }
-        
+
         if (extractedIdea) {
           placeholders.their_idea_pain_vision = extractedIdea;
         }
       }
-      
+
       // Final log with all extracted placeholders
       this.addConsoleLog("PLACEHOLDERS", "=== FINAL EXTRACTION RESULTS ===", {
         name: placeholders.name || null,
         school: placeholders.school || null,
         their_idea_pain_vision: placeholders.their_idea_pain_vision || null,
-        allPlaceholders: placeholders
+        allPlaceholders: placeholders,
       });
-      
     } catch (error) {
       this.addConsoleLog("PLACEHOLDERS", "Template extraction failed", {
         error: error.message,
-        stack: error.stack
+        stack: error.stack,
       });
       // Return empty structure with nulls - don't fall back to profile extraction
       return {
@@ -2761,7 +3155,7 @@ class DOMExtractor {
         their_idea_pain_vision: null,
       };
     }
-    
+
     // Always return placeholders object (even if empty) - never return undefined
     // This ensures we always have a consistent structure
     return {
@@ -2777,35 +3171,40 @@ class DOMExtractor {
    */
   extractPlaceholdersFallback(prospectName, description, messages) {
     const placeholders = {};
-    
+
     // Find the first message sent by "you" (the initial outreach message)
-    const firstYourMessage = (messages || []).find(m => {
+    const firstYourMessage = (messages || []).find((m) => {
       const sender = m.sender || "";
-      const isFromYou = m.isFromYou !== false && m.isFromYou !== undefined ? m.isFromYou : (sender === "you");
-      return isFromYou || sender === "you" || (sender !== "prospect" && !sender.includes("prospect"));
+      const isFromYou =
+        m.isFromYou !== false && m.isFromYou !== undefined
+          ? m.isFromYou
+          : sender === "you";
+      return (
+        isFromYou ||
+        sender === "you" ||
+        (sender !== "prospect" && !sender.includes("prospect"))
+      );
     });
 
     if (firstYourMessage && firstYourMessage.text) {
       const messageText = firstYourMessage.text.trim();
-      
+
       // Extract name: between "hey" and comma
       const nameMatch = messageText.match(/^hey\s+([^,]+?),/i);
       if (nameMatch && nameMatch[1]) {
         placeholders.name = nameMatch[1].trim();
       }
-      
+
       // Extract school: between "students at" and "are working on" (or similar)
       const studentsAtIndex = messageText.toLowerCase().indexOf("students at");
       if (studentsAtIndex !== -1) {
-        const atIndex = messageText.toLowerCase().indexOf("at", studentsAtIndex);
+        const atIndex = messageText
+          .toLowerCase()
+          .indexOf("at", studentsAtIndex);
         if (atIndex !== -1) {
           const schoolStart = atIndex + 3;
-          const endPatterns = [
-            /\s+are\s+working/i,
-            /\s+outside/i,
-            /[.,!?\n]/,
-          ];
-          
+          const endPatterns = [/\s+are\s+working/i, /\s+outside/i, /[.,!?\n]/];
+
           let schoolEnd = messageText.length;
           for (const pattern of endPatterns) {
             const match = messageText.substring(schoolStart).match(pattern);
@@ -2813,27 +3212,31 @@ class DOMExtractor {
               schoolEnd = Math.min(schoolEnd, schoolStart + match.index);
             }
           }
-          
+
           if (schoolEnd > schoolStart) {
             let school = messageText.substring(schoolStart, schoolEnd).trim();
             school = school.replace(/[.,!?;:]+$/, "").trim();
-            
+
             if (school.length >= 1 && school.length <= 50) {
               placeholders.school = school;
             }
           }
         }
       }
-      
+
       // Fallback: if we didn't find "students at", try just "at" before "are working" or "outside"
       if (!placeholders.school) {
-        const atMatch = messageText.match(/\bat\s+([A-Za-z0-9\s&'\-\.]{1,50}?)(?:\s+are\s+working|\s+outside|\.|,|$)/i);
+        const atMatch = messageText.match(
+          /\bat\s+([A-Za-z0-9\s&'\-\.]{1,50}?)(?:\s+are\s+working|\s+outside|\.|,|$)/i
+        );
         if (atMatch && atMatch[1]) {
           let school = atMatch[1].trim();
           school = school.replace(/[.,!?;:]+$/, "").trim();
-          if (school.length >= 1 && 
-              !school.match(/^(the|a|an|and|or|at|from|are|working)$/i) &&
-              school.length <= 50) {
+          if (
+            school.length >= 1 &&
+            !school.match(/^(the|a|an|and|or|at|from|are|working)$/i) &&
+            school.length <= 50
+          ) {
             placeholders.school = school;
           }
         }
@@ -2847,8 +3250,12 @@ class DOMExtractor {
     // Extract their_idea/pain/vision from prospect messages
     // Look for messages where prospect talks about their project, idea, pain, or vision
     const prospectMessages = (messages || [])
-      .filter(m => m.sender === "prospect" || (m.sender !== "you" && m.isFromYou === false))
-      .map(m => m.text || "")
+      .filter(
+        (m) =>
+          m.sender === "prospect" ||
+          (m.sender !== "you" && m.isFromYou === false)
+      )
+      .map((m) => m.text || "")
       .join(" ");
 
     if (prospectMessages) {
@@ -2864,9 +3271,8 @@ class DOMExtractor {
           if (match[1] && match[1].length > 10 && match[1].length < 200) {
             const idea = match[1].trim();
             // Clean up and truncate if too long
-            placeholders.their_idea_pain_vision = idea.length > 100 
-              ? idea.substring(0, 100) + "..." 
-              : idea;
+            placeholders.their_idea_pain_vision =
+              idea.length > 100 ? idea.substring(0, 100) + "..." : idea;
             break;
           }
         }
@@ -2889,47 +3295,58 @@ class DOMExtractor {
         threadId: conversationData.threadId,
       });
       await chrome.storage.local.set({ [storageKey]: savedData });
-      
+
       // Log data being saved to Supabase
       this.addConsoleLog("DB", "Preparing to save to Supabase", {
         threadId: conversationData.threadId,
         title: conversationData.title,
-        description: conversationData.description ? conversationData.description.substring(0, 100) + "..." : "none",
-        messageCount: conversationData.messageCount || conversationData.messages?.length || 0,
+        description: conversationData.description
+          ? conversationData.description.substring(0, 100) + "..."
+          : "none",
+        messageCount:
+          conversationData.messageCount ||
+          conversationData.messages?.length ||
+          0,
         url: conversationData.url,
-        hasPlaceholders: !!(conversationData.placeholders && Object.keys(conversationData.placeholders).length > 0),
+        hasPlaceholders: !!(
+          conversationData.placeholders &&
+          Object.keys(conversationData.placeholders).length > 0
+        ),
         placeholders: conversationData.placeholders || {},
         status: conversationData.status || "unknown",
         participants: conversationData.participants || [],
         hasStatistics: !!conversationData.statistics,
-        messagesPreview: conversationData.messages?.slice(0, 3).map(m => ({
-          index: m.index,
-          sender: m.sender,
-          textPreview: m.text?.substring(0, 50) + "...",
-          attachmentsCount: m.attachments?.length || 0,
-          reactionsCount: m.reactions?.length || 0,
-          linksCount: m.links?.length || 0,
-          mentionsCount: m.mentions?.length || 0
-        })) || []
+        messagesPreview:
+          conversationData.messages?.slice(0, 3).map((m) => ({
+            index: m.index,
+            sender: m.sender,
+            textPreview: m.text?.substring(0, 50) + "...",
+            attachmentsCount: m.attachments?.length || 0,
+            reactionsCount: m.reactions?.length || 0,
+            linksCount: m.links?.length || 0,
+            mentionsCount: m.mentions?.length || 0,
+          })) || [],
       });
-      
+
       // Save to Supabase
       this.addConsoleLog("DB", "Writing to Supabase", {
         threadId: conversationData.threadId,
       });
-      
-      const result = await this.supabaseService.saveConversation(conversationData);
-      
+
+      const result = await this.supabaseService.saveConversation(
+        conversationData
+      );
+
       this.addConsoleLog("DB", "Write complete", {
         threadId: conversationData.threadId,
-        result: result
+        result: result,
       });
     } catch (error) {
       this.addConsoleLog("DB", "Save to Supabase FAILED", {
         threadId: conversationData.threadId,
         error: error.message || String(error),
         errorStack: error.stack,
-        conversationDataKeys: Object.keys(conversationData || {})
+        conversationDataKeys: Object.keys(conversationData || {}),
       });
       throw error; // Re-throw so caller can handle it
     }
@@ -3662,16 +4079,20 @@ class DOMExtractor {
       // Try health check first, but don't fail completely if it fails
       const healthy = await this.aiService.checkHealth();
       if (!healthy) {
-        container.innerHTML = '<div class="status-details" style="color: #ffb4b4">AI service not available. Start python main.py<br><small style="color: #9aa7b2;">Make sure to run: cd ai_module && python main.py</small></div>';
+        container.innerHTML =
+          '<div class="status-details" style="color: #ffb4b4">AI service not available. Start python main.py<br><small style="color: #9aa7b2;">Make sure to run: cd ai_module && python main.py</small></div>';
         // Still try to load scripts as a fallback
-        console.warn("Health check failed, but attempting to load scripts anyway...");
+        console.warn(
+          "Health check failed, but attempting to load scripts anyway..."
+        );
       }
 
       const result = await this.aiService.getScriptsList();
       const phases = result.phases || {};
 
       if (Object.keys(phases).length === 0) {
-        container.innerHTML = '<div class="status-details" style="color: #9aa7b2">No scripts available. Check Flask server logs.</div>';
+        container.innerHTML =
+          '<div class="status-details" style="color: #9aa7b2">No scripts available. Check Flask server logs.</div>';
         return;
       }
 
@@ -3708,8 +4129,12 @@ class DOMExtractor {
           await this.insertScript(phase, templateId);
         });
       });
-      
-      console.log("Successfully loaded and displayed", Object.keys(phases).length, "phases of scripts");
+
+      console.log(
+        "Successfully loaded and displayed",
+        Object.keys(phases).length,
+        "phases of scripts"
+      );
     } catch (error) {
       console.error("Error loading scripts:", error);
       const errorMsg = error.message || "Unknown error";
@@ -3728,7 +4153,10 @@ class DOMExtractor {
       let scriptText = result.text || "";
 
       if (!scriptText) {
-        this.addConsoleLog("SCRIPTS", "Script text is empty", { phase, templateId });
+        this.addConsoleLog("SCRIPTS", "Script text is empty", {
+          phase,
+          templateId,
+        });
         return;
       }
 
@@ -3750,15 +4178,19 @@ class DOMExtractor {
 
       // Fetch conversation data to get placeholders
       let placeholders = {};
-      
+
       if (threadId) {
         try {
           const convo = await this.supabaseService.getConversation(threadId);
           if (convo && convo.placeholders) {
             placeholders = convo.placeholders;
-            this.addConsoleLog("SCRIPTS", "Loaded placeholders from conversation", {
-              placeholders,
-            });
+            this.addConsoleLog(
+              "SCRIPTS",
+              "Loaded placeholders from conversation",
+              {
+                placeholders,
+              }
+            );
           }
         } catch (err) {
           console.warn("Could not load conversation for placeholders:", err);
@@ -3770,26 +4202,38 @@ class DOMExtractor {
       // Define all placeholder patterns and their values
       // If placeholder is null/undefined, leave the placeholder text so user can fill manually
       const replacements = [];
-      
+
       // Name placeholder
       if (placeholders.name) {
         replacements.push({ pattern: /\{name\}/gi, value: placeholders.name });
       }
       // If name is null, leave {name} in the text for user to fill
-      
+
       // School placeholder
       if (placeholders.school) {
-        replacements.push({ pattern: /\{school\}/gi, value: placeholders.school });
+        replacements.push({
+          pattern: /\{school\}/gi,
+          value: placeholders.school,
+        });
       }
       // If school is null, leave {school} in the text for user to fill
-      
+
       // Their idea/pain/vision placeholder
       if (placeholders.their_idea_pain_vision) {
         // Replace both {their_idea/pain/vision} and {their_idea_pain_vision} variants
-        replacements.push({ pattern: /\{their_idea\/pain\/vision\}/gi, value: placeholders.their_idea_pain_vision });
-        replacements.push({ pattern: /\{their_idea_pain_vision\}/gi, value: placeholders.their_idea_pain_vision });
+        replacements.push({
+          pattern: /\{their_idea\/pain\/vision\}/gi,
+          value: placeholders.their_idea_pain_vision,
+        });
+        replacements.push({
+          pattern: /\{their_idea_pain_vision\}/gi,
+          value: placeholders.their_idea_pain_vision,
+        });
         // Also handle {initiative} as an alias
-        replacements.push({ pattern: /\{initiative\}/gi, value: placeholders.their_idea_pain_vision });
+        replacements.push({
+          pattern: /\{initiative\}/gi,
+          value: placeholders.their_idea_pain_vision,
+        });
       }
       // If their_idea_pain_vision is null, leave placeholder in the text for user to fill
 
@@ -3801,7 +4245,7 @@ class DOMExtractor {
           replacedCount++;
         }
       }
-      
+
       this.addConsoleLog("SCRIPTS", "Replaced placeholders", {
         placeholdersFound: Object.keys(placeholders).length,
         placeholdersReplaced: replacedCount,
@@ -3879,7 +4323,10 @@ class DOMExtractor {
         source: payload.source,
       });
     } catch (error) {
-      this.setKbStatus(error.message || "Failed to save knowledge entry.", true);
+      this.setKbStatus(
+        error.message || "Failed to save knowledge entry.",
+        true
+      );
       this.addConsoleLog("ERROR", "Knowledge entry save failed", {
         message: error.message,
       });

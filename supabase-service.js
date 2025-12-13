@@ -40,16 +40,17 @@ class SupabaseService {
     try {
       // Validate Supabase configuration
       if (!this.config || !this.config.url || !this.config.anonKey) {
-        const errorMsg = "Supabase configuration missing. Please check your supabase-config.js file.";
+        const errorMsg =
+          "Supabase configuration missing. Please check your supabase-config.js file.";
         console.error("Supabase config error:", {
           hasConfig: !!this.config,
-          hasUrl: !!(this.config?.url),
-          hasAnonKey: !!(this.config?.anonKey)
+          hasUrl: !!this.config?.url,
+          hasAnonKey: !!this.config?.anonKey,
         });
         if (window.uiConsoleLog) {
           window.uiConsoleLog("DB", "Config error", {
             error: errorMsg,
-            hasConfig: !!this.config
+            hasConfig: !!this.config,
           });
         }
         throw new Error(errorMsg);
@@ -59,7 +60,7 @@ class SupabaseService {
         window.uiConsoleLog("DB", "saveConversation", {
           threadId: conversationData.threadId,
           baseUrl: this.baseUrl,
-          hasConfig: !!this.config
+          hasConfig: !!this.config,
         });
       console.log(
         "DB WRITE: saveConversation threadId=",
@@ -92,92 +93,149 @@ class SupabaseService {
       // Check if conversation exists
       const existing = await this.getConversation(conversationData.threadId);
       if (existing) {
-        // Smarter merge to preserve chronology across partial loads
-        const existingMsgs = Array.isArray(existing.messages)
-          ? existing.messages.map(normalizeMessage)
-          : [];
+        // CRITICAL FIX: Validate that we're not mixing messages from different conversations
+        // If this is a manual update (indicated by forceReplace flag) or if there's a mismatch,
+        // replace all messages instead of merging to prevent cross-thread contamination
 
-        const buildSig = (m) => `${m.sender}|${m.text}`;
-        const newBySig = new Map();
-        const oldBySig = new Map();
+        const shouldReplaceAll = conversationData.forceReplace || false;
+        let combined = null; // Will be set if we successfully merge, null means replace all
 
-        // Positions within their respective arrays
-        const newOrder = [];
-        newMsgs
-          .slice()
-          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
-          .forEach((m, i) => {
-            const sig = buildSig(m);
-            if (!newBySig.has(sig)) {
-              newBySig.set(sig, { msg: m, pos: i });
-              newOrder.push(sig);
-            }
-          });
+        // Check for potential cross-thread contamination:
+        // 1. If existing has messages but new extraction has none, something's wrong
+        // 2. If title/name changed significantly, might be different person
+        const existingTitle = (existing.title || "").trim().toLowerCase();
+        const newTitle = (conversationData.title || "").trim().toLowerCase();
+        const titleChanged =
+          existingTitle &&
+          newTitle &&
+          existingTitle !== newTitle &&
+          existingTitle !== "unknown" &&
+          newTitle !== "unknown";
 
-        const oldOrder = [];
-        existingMsgs
-          .slice()
-          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
-          .forEach((m, i) => {
-            const sig = buildSig(m);
-            if (!oldBySig.has(sig)) {
-              oldBySig.set(sig, { msg: m, pos: i });
-              oldOrder.push(sig);
-            }
-          });
-
-        // Identify overlap and only-in-old
-        const overlap = new Set(newOrder.filter((sig) => oldBySig.has(sig)));
-        const onlyOld = oldOrder.filter((sig) => !newBySig.has(sig));
-
-        let combined = [];
-        if (overlap.size > 0) {
-          // Compute min/max old positions of overlap to split old-only into older/newer buckets
-          let minOldOverlap = Infinity;
-          let maxOldOverlap = -Infinity;
-          overlap.forEach((sig) => {
-            const p = oldBySig.get(sig)?.pos ?? 0;
-            if (p < minOldOverlap) minOldOverlap = p;
-            if (p > maxOldOverlap) maxOldOverlap = p;
-          });
-
-          const olderOnly = onlyOld
-            .filter((sig) => (oldBySig.get(sig)?.pos ?? 0) < minOldOverlap)
-            .sort(
-              (a, b) =>
-                (oldBySig.get(a)?.pos ?? 0) - (oldBySig.get(b)?.pos ?? 0)
-            )
-            .map((sig) => oldBySig.get(sig).msg);
-
-          const newerOnly = onlyOld
-            .filter((sig) => (oldBySig.get(sig)?.pos ?? 0) > maxOldOverlap)
-            .sort(
-              (a, b) =>
-                (oldBySig.get(a)?.pos ?? 0) - (oldBySig.get(b)?.pos ?? 0)
-            )
-            .map((sig) => oldBySig.get(sig).msg);
-
-          const coreNew = newOrder
-            .map((sig) => newBySig.get(sig)?.msg)
-            .filter(Boolean);
-
-          combined = [...olderOnly, ...coreNew, ...newerOnly];
+        // If title changed significantly, replace all to avoid mixing conversations
+        if (titleChanged && !shouldReplaceAll) {
+          if (window.uiConsoleLog) {
+            window.uiConsoleLog(
+              "DB",
+              "Title mismatch detected - replacing all messages",
+              {
+                existingTitle: existing.title,
+                newTitle: conversationData.title,
+                threadId: conversationData.threadId,
+              }
+            );
+          }
+          // combined remains null, will replace all
+        } else if (shouldReplaceAll) {
+          // Manual update requested - replace all messages
+          if (window.uiConsoleLog) {
+            window.uiConsoleLog(
+              "DB",
+              "Force replace - replacing all messages",
+              {
+                threadId: conversationData.threadId,
+                existingCount: existing.messages?.length || 0,
+                newCount: newMsgs.length,
+              }
+            );
+          }
+          // combined remains null, will replace all
         } else {
-          // No overlap: keep existing in place, append latest extraction at the end
-          const coreNew = newOrder
-            .map((sig) => newBySig.get(sig)?.msg)
-            .filter(Boolean);
-          const restOld = onlyOld
-            .sort(
-              (a, b) =>
-                (oldBySig.get(a)?.pos ?? 0) - (oldBySig.get(b)?.pos ?? 0)
-            )
-            .map((sig) => oldBySig.get(sig).msg);
-          combined = [...restOld, ...coreNew];
+          // Safe merge: only merge if we have overlap and titles match
+          const existingMsgs = Array.isArray(existing.messages)
+            ? existing.messages.map(normalizeMessage)
+            : [];
+
+          const buildSig = (m) => `${m.sender}|${m.text}`;
+          const newBySig = new Map();
+          const oldBySig = new Map();
+
+          // Positions within their respective arrays
+          const newOrder = [];
+          newMsgs
+            .slice()
+            .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+            .forEach((m, i) => {
+              const sig = buildSig(m);
+              if (!newBySig.has(sig)) {
+                newBySig.set(sig, { msg: m, pos: i });
+                newOrder.push(sig);
+              }
+            });
+
+          const oldOrder = [];
+          existingMsgs
+            .slice()
+            .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+            .forEach((m, i) => {
+              const sig = buildSig(m);
+              if (!oldBySig.has(sig)) {
+                oldBySig.set(sig, { msg: m, pos: i });
+                oldOrder.push(sig);
+              }
+            });
+
+          // Identify overlap and only-in-old
+          const overlap = new Set(newOrder.filter((sig) => oldBySig.has(sig)));
+          const onlyOld = oldOrder.filter((sig) => !newBySig.has(sig));
+
+          // Only merge if we have significant overlap (at least 30% of messages match)
+          // This prevents mixing messages from completely different conversations
+          const overlapRatio = overlap.size / Math.max(newOrder.length, 1);
+          const hasSignificantOverlap =
+            overlapRatio >= 0.3 || overlap.size >= 3;
+
+          if (hasSignificantOverlap && overlap.size > 0) {
+            // Compute min/max old positions of overlap to split old-only into older/newer buckets
+            let minOldOverlap = Infinity;
+            let maxOldOverlap = -Infinity;
+            overlap.forEach((sig) => {
+              const p = oldBySig.get(sig)?.pos ?? 0;
+              if (p < minOldOverlap) minOldOverlap = p;
+              if (p > maxOldOverlap) maxOldOverlap = p;
+            });
+
+            const olderOnly = onlyOld
+              .filter((sig) => (oldBySig.get(sig)?.pos ?? 0) < minOldOverlap)
+              .sort(
+                (a, b) =>
+                  (oldBySig.get(a)?.pos ?? 0) - (oldBySig.get(b)?.pos ?? 0)
+              )
+              .map((sig) => oldBySig.get(sig).msg);
+
+            const newerOnly = onlyOld
+              .filter((sig) => (oldBySig.get(sig)?.pos ?? 0) > maxOldOverlap)
+              .sort(
+                (a, b) =>
+                  (oldBySig.get(a)?.pos ?? 0) - (oldBySig.get(b)?.pos ?? 0)
+              )
+              .map((sig) => oldBySig.get(sig).msg);
+
+            const coreNew = newOrder
+              .map((sig) => newBySig.get(sig)?.msg)
+              .filter(Boolean);
+
+            combined = [...olderOnly, ...coreNew, ...newerOnly];
+          } else {
+            // No significant overlap - likely different conversation, replace all
+            if (window.uiConsoleLog) {
+              window.uiConsoleLog(
+                "DB",
+                "Low overlap - replacing all messages",
+                {
+                  overlapCount: overlap.size,
+                  overlapRatio: overlapRatio,
+                  threadId: conversationData.threadId,
+                }
+              );
+            }
+            // combined remains null, will replace all
+          }
         }
 
         // Reindex and strictly map to minimal schema
-        const merged = combined.map((m, i) => ({
+        // If combined is null, use newMsgs directly (replace all)
+        const merged = (combined || newMsgs).map((m, i) => ({
           index: i,
           text: m.text || "",
           sender: m.sender || "prospect",
@@ -191,21 +249,36 @@ class SupabaseService {
         // DO NOT merge with existing placeholders - they might be from profile data
         // This ensures we always use the exact values from the actual message
         const placeholdersToSave = conversationData.placeholders || {};
-        
+
         const basePayload = {
           // Preserve URL - use new if provided, otherwise keep existing, otherwise null
-          url: conversationData.url !== undefined ? conversationData.url : (existing.url || null),
+          url:
+            conversationData.url !== undefined
+              ? conversationData.url
+              : existing.url || null,
           // Preserve title - use new if provided and valid, otherwise keep existing
-          title: conversationData.title !== undefined && conversationData.title ? conversationData.title : (existing.title || null),
+          title:
+            conversationData.title !== undefined && conversationData.title
+              ? conversationData.title
+              : existing.title || null,
           // Preserve description - use new if provided, otherwise keep existing
-          description: conversationData.description !== undefined ? conversationData.description : (existing.description || null),
+          description:
+            conversationData.description !== undefined
+              ? conversationData.description
+              : existing.description || null,
           messages: merged,
           message_count: merged.length,
           updated_at: new Date().toISOString(),
           // Preserve existing status if not explicitly provided
-          status: conversationData.status !== undefined ? conversationData.status : existing.status || 'unknown',
+          status:
+            conversationData.status !== undefined
+              ? conversationData.status
+              : existing.status || "unknown",
           // Preserve existing phase if not explicitly provided, default to 'building_rapport'
-          phase: conversationData.phase !== undefined ? conversationData.phase : (existing.phase || 'building_rapport'),
+          phase:
+            conversationData.phase !== undefined
+              ? conversationData.phase
+              : existing.phase || "building_rapport",
           // Store placeholders from message ONLY - overwrite any existing (don't merge)
           placeholders: placeholdersToSave,
         };
@@ -215,21 +288,23 @@ class SupabaseService {
           window.uiConsoleLog("DB", "Saving to Supabase (UPDATE)", {
             threadId: conversationData.threadId,
             title: basePayload.title,
-            description: basePayload.description ? basePayload.description.substring(0, 100) + "..." : "none",
+            description: basePayload.description
+              ? basePayload.description.substring(0, 100) + "..."
+              : "none",
             messageCount: basePayload.message_count,
             url: basePayload.url,
             status: basePayload.status,
             placeholders: basePayload.placeholders,
-            messagesSample: merged.slice(0, 3).map(m => ({
+            messagesSample: merged.slice(0, 3).map((m) => ({
               index: m.index,
               sender: m.sender,
               textPreview: m.text?.substring(0, 50) + "...",
               attachmentsCount: m.attachments?.length || 0,
               reactionsCount: m.reactions?.length || 0,
               linksCount: m.links?.length || 0,
-              mentionsCount: m.mentions?.length || 0
+              mentionsCount: m.mentions?.length || 0,
             })),
-            totalMessages: merged.length
+            totalMessages: merged.length,
           });
         }
 
@@ -254,16 +329,22 @@ class SupabaseService {
             status: response.status,
             statusText: response.statusText,
             error: errorText,
-            url: `${this.baseUrl}/conversations?thread_id=eq.${encodeURIComponent(conversationData.threadId)}`
+            url: `${
+              this.baseUrl
+            }/conversations?thread_id=eq.${encodeURIComponent(
+              conversationData.threadId
+            )}`,
           });
           if (window.uiConsoleLog)
             window.uiConsoleLog("DB", "update error", {
               status: response.status,
               statusText: response.statusText,
               error: errorText,
-              threadId: conversationData.threadId
+              threadId: conversationData.threadId,
             });
-          throw new Error(`Supabase update failed (${response.status}): ${errorText}`);
+          throw new Error(
+            `Supabase update failed (${response.status}): ${errorText}`
+          );
         }
 
         if (window.uiConsoleLog)
@@ -291,9 +372,9 @@ class SupabaseService {
           messages: withIndex,
           message_count: withIndex.length,
           updated_at: new Date().toISOString(),
-          status: conversationData.status || 'unknown',
+          status: conversationData.status || "unknown",
           // Default phase to 'building_rapport' for new conversations
-          phase: conversationData.phase || 'building_rapport',
+          phase: conversationData.phase || "building_rapport",
           // Store placeholders as JSONB map - use only from conversationData (extracted from message)
           placeholders: conversationData.placeholders || {},
         };
@@ -303,21 +384,23 @@ class SupabaseService {
           window.uiConsoleLog("DB", "Saving to Supabase (INSERT)", {
             threadId: insertPayload.thread_id,
             title: insertPayload.title,
-            description: insertPayload.description ? insertPayload.description.substring(0, 100) + "..." : "none",
+            description: insertPayload.description
+              ? insertPayload.description.substring(0, 100) + "..."
+              : "none",
             messageCount: insertPayload.message_count,
             url: insertPayload.url,
             status: insertPayload.status,
             placeholders: insertPayload.placeholders,
-            messagesSample: withIndex.slice(0, 3).map(m => ({
+            messagesSample: withIndex.slice(0, 3).map((m) => ({
               index: m.index,
               sender: m.sender,
               textPreview: m.text?.substring(0, 50) + "...",
               attachmentsCount: m.attachments?.length || 0,
               reactionsCount: m.reactions?.length || 0,
               linksCount: m.links?.length || 0,
-              mentionsCount: m.mentions?.length || 0
+              mentionsCount: m.mentions?.length || 0,
             })),
-            totalMessages: withIndex.length
+            totalMessages: withIndex.length,
           });
         }
 
@@ -338,16 +421,18 @@ class SupabaseService {
             status: response.status,
             statusText: response.statusText,
             error: errorText,
-            url: `${this.baseUrl}/conversations`
+            url: `${this.baseUrl}/conversations`,
           });
           if (window.uiConsoleLog)
             window.uiConsoleLog("DB", "insert error", {
               status: response.status,
               statusText: response.statusText,
               error: errorText,
-              threadId: conversationData.threadId
+              threadId: conversationData.threadId,
             });
-          throw new Error(`Supabase insert failed (${response.status}): ${errorText}`);
+          throw new Error(
+            `Supabase insert failed (${response.status}): ${errorText}`
+          );
         }
 
         if (window.uiConsoleLog)
@@ -453,7 +538,10 @@ class SupabaseService {
         messages: conversationData.messages || [],
         message_count: (conversationData.messages || []).length,
         updated_at: new Date().toISOString(),
-        status: conversationData.status !== undefined ? conversationData.status : null,
+        status:
+          conversationData.status !== undefined
+            ? conversationData.status
+            : null,
       };
 
       const response = await fetch(
@@ -495,11 +583,27 @@ class SupabaseService {
     try {
       if (window.uiConsoleLog)
         window.uiConsoleLog("DB", "updateLeadStatus", { threadId, status });
-      console.log("DB UPDATE: updateLeadStatus threadId=", threadId, "status=", status);
+      console.log(
+        "DB UPDATE: updateLeadStatus threadId=",
+        threadId,
+        "status=",
+        status
+      );
 
-      const validStatuses = ['unknown', 'uninterested', 'interested', 'enrolled', 'ambassador', 'graduated'];
+      const validStatuses = [
+        "unknown",
+        "uninterested",
+        "interested",
+        "enrolled",
+        "ambassador",
+        "graduated",
+      ];
       if (!validStatuses.includes(status)) {
-        throw new Error(`Invalid status: ${status}. Must be one of: ${validStatuses.join(', ')}`);
+        throw new Error(
+          `Invalid status: ${status}. Must be one of: ${validStatuses.join(
+            ", "
+          )}`
+        );
       }
 
       const payload = {
@@ -508,7 +612,9 @@ class SupabaseService {
       };
 
       const response = await fetch(
-        `${this.baseUrl}/conversations?thread_id=eq.${encodeURIComponent(threadId)}`,
+        `${this.baseUrl}/conversations?thread_id=eq.${encodeURIComponent(
+          threadId
+        )}`,
         {
           method: "PATCH",
           headers: {

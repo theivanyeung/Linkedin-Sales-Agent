@@ -49,6 +49,10 @@
    */
   async function extractConversationData() {
     try {
+      // CRITICAL: Wait a moment to ensure page has fully loaded after thread switch
+      // This prevents extracting messages from the previous thread that might still be in the DOM
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
       // Get thread ID from URL
       const threadId =
         window.location.href.match(/\/thread\/([^\/\?]+)/)?.[1] || "unknown";
@@ -569,6 +573,19 @@
       const cleanTitle = clean(prospectName) || "Unknown";
       const cleanDescription = clean(prospectDescription);
 
+      // CRITICAL: Verify threadId consistency - if URL threadId doesn't match, something's wrong
+      const urlThreadId =
+        window.location.href.match(/\/thread\/([^\/\?]+)/)?.[1] || "unknown";
+      if (
+        urlThreadId !== "unknown" &&
+        threadId !== "unknown" &&
+        urlThreadId !== threadId
+      ) {
+        return {
+          error: `Thread ID mismatch detected. URL: ${urlThreadId}, Extracted: ${threadId}. Page may still be loading. Please wait and try again.`,
+        };
+      }
+
       // CRITICAL FIX: Validate messages to detect cross-thread contamination
       // Check if any messages appear to be from a different conversation
       // This happens when LinkedIn has multiple threads in the DOM
@@ -576,55 +593,134 @@
       const initialMessagePattern = /^hey\s+([^,]+),/i;
       let firstInitialName = null;
       let foundMultipleInitials = false;
+      const warnings = []; // Collect warnings to send to popup console UI
 
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
         const text = msg.text || "";
 
         // Check if this is an initial message (starts with "hey [name]")
+        // Check BOTH from "you" and "prospect" - sometimes sender detection is wrong
         const initialMatch = text.match(initialMessagePattern);
-        if (initialMatch && msg.sender === "you") {
+        if (initialMatch) {
           const mentionedName = initialMatch[1].trim().toLowerCase();
+          const mentionedNameWords = mentionedName
+            .split(/\s+/)
+            .filter((w) => w.length > 2);
 
-          if (firstInitialName === null) {
-            // First initial message - record the name
-            firstInitialName = mentionedName;
-          } else if (mentionedName !== firstInitialName) {
-            // Found a second initial message with a different name - cross-thread contamination!
-            foundMultipleInitials = true;
-            console.warn(
-              `[Content Script] Detected cross-thread contamination: found initial messages for both "${firstInitialName}" and "${mentionedName}"`
-            );
+          // Normalize the current prospect name for comparison
+          const currentProspectName = cleanTitle.toLowerCase().trim();
+          const currentProspectNameWords = currentProspectName
+            .split(/\s+/)
+            .filter((w) => w.length > 2);
+
+          // Check if this initial message matches the current conversation
+          let nameMatches = false;
+          if (
+            currentProspectName !== "unknown" &&
+            currentProspectName.length > 0
+          ) {
+            // Direct match
+            if (
+              mentionedName === currentProspectName ||
+              currentProspectName.includes(mentionedName) ||
+              mentionedName.includes(currentProspectName)
+            ) {
+              nameMatches = true;
+            }
+            // Word-based match (handles "Vivaan" vs "Vivaan Kumar")
+            else if (
+              mentionedNameWords.length > 0 &&
+              currentProspectNameWords.length > 0
+            ) {
+              const hasCommonWord = mentionedNameWords.some((word) =>
+                currentProspectNameWords.some(
+                  (cWord) =>
+                    word === cWord ||
+                    word.includes(cWord) ||
+                    cWord.includes(word)
+                )
+              );
+              if (hasCommonWord) {
+                nameMatches = true;
+              }
+            }
+          }
+
+          // If we have a prospect name and this initial message doesn't match, it's contamination
+          if (
+            currentProspectName !== "unknown" &&
+            currentProspectName.length > 0 &&
+            !nameMatches
+          ) {
+            const warningMsg = `CROSS-THREAD CONTAMINATION DETECTED at message ${i}: Initial message mentions "${mentionedName}" but conversation is with "${currentProspectName}". Stopping extraction here.`;
+            // STEALTH: No console logging - warnings sent to popup UI only
+            warnings.push({
+              tag: "WARNING",
+              message: warningMsg,
+              meta: {
+                messageIndex: i,
+                mentionedName: mentionedName,
+                currentProspectName: currentProspectName,
+                action: "Stopped extraction to prevent contamination",
+              },
+            });
             break; // Stop extracting - we've hit messages from a different thread
           }
 
-          // Also check against the current conversation title
-          const currentName = cleanTitle.toLowerCase();
-          if (
-            currentName !== "unknown" &&
-            mentionedName !== currentName &&
-            !currentName.includes(mentionedName) &&
-            !mentionedName.includes(currentName)
-          ) {
-            console.warn(
-              `[Content Script] Detected cross-thread contamination at message ${i}: initial message mentions "${mentionedName}" but conversation is with "${currentName}"`
+          // Track first initial name for comparison
+          if (firstInitialName === null) {
+            firstInitialName = mentionedName;
+          } else if (mentionedName !== firstInitialName) {
+            // Found a second initial message with a different name - cross-thread contamination!
+            // Even if we don't have a prospect name, this is suspicious
+            const firstWords = firstInitialName
+              .split(/\s+/)
+              .filter((w) => w.length > 2);
+            const hasCommonWord = firstWords.some((word) =>
+              mentionedNameWords.some(
+                (sWord) =>
+                  word === sWord || word.includes(sWord) || sWord.includes(word)
+              )
             );
-            break; // Stop extracting - we've hit messages from a different thread
+
+            if (!hasCommonWord) {
+              foundMultipleInitials = true;
+              const warningMsg = `CROSS-THREAD CONTAMINATION DETECTED: Found initial messages for both "${firstInitialName}" and "${mentionedName}". Stopping extraction here.`;
+              // STEALTH: No console logging - warnings sent to popup UI only
+              warnings.push({
+                tag: "WARNING",
+                message: warningMsg,
+                meta: {
+                  firstInitialName: firstInitialName,
+                  secondInitialName: mentionedName,
+                  action: "Stopped extraction to prevent contamination",
+                },
+              });
+              break; // Stop extracting - we've hit messages from a different thread
+            }
           }
         }
 
         filteredMessages.push(msg);
       }
 
-      // If we filtered out messages, log a warning
+      // Warning already added to warnings array above
+
+      // Add warning if messages were filtered
       if (filteredMessages.length < messages.length) {
-        console.warn(
-          `[Content Script] Filtered out ${
+        warnings.push({
+          tag: "WARNING",
+          message: `Filtered out ${
             messages.length - filteredMessages.length
-          } messages from different thread(s). Original count: ${
-            messages.length
-          }, filtered count: ${filteredMessages.length}`
-        );
+          } messages from different thread(s)`,
+          meta: {
+            originalCount: messages.length,
+            filteredCount: filteredMessages.length,
+            reason:
+              "Cross-thread contamination detected. This usually happens when switching threads too quickly. Wait a moment before extracting.",
+          },
+        });
       }
 
       // Create conversation data
@@ -638,6 +734,7 @@
         participants: extractParticipants(filteredMessages),
         statistics: calculateStatistics(filteredMessages),
         messages: filteredMessages,
+        warnings: warnings, // Include warnings for popup to log
       };
 
       return conversationData;

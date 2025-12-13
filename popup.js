@@ -2017,6 +2017,20 @@ class DOMExtractor {
       }
       // CRITICAL FIX: Pass force=true to bypass duplicate prevention when manually updating
       const convo = await this.extractConversationFromActiveTab(tab.id, true);
+
+      // Log any warnings from extraction to console UI
+      if (convo && convo.warnings && Array.isArray(convo.warnings)) {
+        convo.warnings.forEach((warning) => {
+          this.addConsoleLog(
+            warning.tag || "WARNING",
+            warning.message,
+            warning.meta || {}
+          );
+        });
+        // Remove warnings from convo object before processing
+        delete convo.warnings;
+      }
+
       if (convo && !convo.error) {
         // Get existing conversation to preserve existing placeholders
         const existing = await this.supabaseService.getConversation(
@@ -2330,6 +2344,19 @@ class DOMExtractor {
           action: "extractConversation",
           force: force,
         });
+
+        // Log any warnings from extraction to console UI
+        if (domData && domData.warnings && Array.isArray(domData.warnings)) {
+          domData.warnings.forEach((warning) => {
+            this.addConsoleLog(
+              warning.tag || "WARNING",
+              warning.message,
+              warning.meta || {}
+            );
+          });
+          // Remove warnings from domData object before returning
+          delete domData.warnings;
+        }
       } catch (messageError) {
         // Content script might not be loaded - try to inject it
         const errorStr = String(messageError.message || messageError);
@@ -2361,6 +2388,23 @@ class DOMExtractor {
               action: "extractConversation",
               force: force,
             });
+
+            // Log any warnings from extraction to console UI
+            if (
+              domData &&
+              domData.warnings &&
+              Array.isArray(domData.warnings)
+            ) {
+              domData.warnings.forEach((warning) => {
+                this.addConsoleLog(
+                  warning.tag || "WARNING",
+                  warning.message,
+                  warning.meta || {}
+                );
+              });
+              // Remove warnings from domData object before returning
+              delete domData.warnings;
+            }
           } catch (injectError) {
             // If injection also fails, return helpful error
             return {

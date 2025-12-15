@@ -291,7 +291,7 @@ def generate_response(conv: Conversation, analysis_result: Optional[Dict[str, An
             processing_start = time.time()
             import re
             # Remove emojis
-            response_text = re.sub(r'[^\w\s\.,!?\-\(\)\']', '', response_text)
+            response_text = re.sub(r'[^\w\s\.,!?\-\(\)\':/=&_]', '', response_text)
             response_text = response_text.strip().strip('"').strip("'")
             processing_time = time.time() - processing_start
             if Config.DEBUG:

@@ -104,6 +104,9 @@ def _build_kb_query(conv: Conversation, phase: str) -> str:
         # In rapport phase, they often ask about background, friends, connections
         if not any("friend" in term or "background" in term for term in query_terms):
             query_terms.append("friend background school connection")
+    elif phase == "post_selling":
+        # In post-selling phase, they're asking specific questions - prioritize those topics
+        query_terms.append("prodicity program pricing application details logistics")
     elif phase == "doing_the_ask":
         # In selling phase, they might ask about program details, pricing, application
         query_terms.append("prodicity program pricing application")
@@ -168,7 +171,7 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
     # Analyze with GPT-5-mini to get strategic decision
     analyzer_start = time.time()
     try:
-        analysis = analyze_conversation(conv)
+        analysis = analyze_conversation(conv, current_phase=current_phase)
         analyzer_time = time.time() - analyzer_start
         if Config.DEBUG:
             if analyzer_time < 1:
@@ -210,46 +213,43 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
         print(f"[Orchestrator] Instruction for writer: {instruction_for_writer}")
         print(f"[Orchestrator] Permission Gate: current_phase={current_phase}, confirm_phase_change={confirm_phase_change}")
     
-    # PERMISSION GATE: Check if we need human approval before transitioning to selling phase
-    # Only ask for approval if the suggested phase is DIFFERENT from the current phase in Supabase
-    suggested_phase = "doing_the_ask" if move_forward else "building_rapport"
-    
-    # Check if user manually set phase to "doing_the_ask" (respect manual overrides)
-    # If current_phase is "doing_the_ask" but analyzer says "building_rapport", it's a manual override
-    # Also respect if confirm_phase_change=True (explicit approval)
-    manual_phase_override = (
-        current_phase == "doing_the_ask" and 
-        analyzer_phase == "building_rapport" and
-        confirm_phase_change is not False  # Not explicitly rejected
-    )
-    
-    if Config.DEBUG and manual_phase_override:
-        print("[Orchestrator] Manual phase override detected: user set phase to 'doing_the_ask' but analyzer suggests 'building_rapport' - respecting user's choice")
-    
-    if move_forward or manual_phase_override:
-        # Analyzer wants to move forward OR user manually set phase to selling
-        # (respect manual phase changes even if analyzer disagrees)
-        
-        # User explicitly rejected the transition
-        if confirm_phase_change is False:
-            if Config.DEBUG:
-                print("[Orchestrator] PERMISSION GATE: User rejected phase transition - forcing rapport phase")
-            # Override analyzer - force rapport phase
+    # CRITICAL: Preserve post_selling phase if we're already in it
+    # Once in post_selling, stay there - NEVER transition away from it unless explicitly going back to building_rapport
+    if current_phase == "post_selling":
+        # ALWAYS preserve post_selling - this is a one-way phase (can't go back to doing_the_ask)
+        # Only allow transition to building_rapport if analyzer explicitly says so (very rare)
+        if analyzer_phase == "building_rapport":
+            # Analyzer wants to go back to rapport - respect it (but this should be very rare)
             phase = "building_rapport"
             ready_for_ask = False
-            # Update instruction to continue building rapport
-            instruction_for_writer = "Continue building rapport - ask about their interests, school, or current projects"
-        # Check if approval is needed: only if current_phase != suggested_phase (i.e., phase change needed)
-        # AND it's not a manual override
-        elif current_phase and current_phase != suggested_phase and confirm_phase_change is not True and not manual_phase_override:
+            if Config.DEBUG:
+                print(f"[Orchestrator] Analyzer wants to go back to building_rapport from post_selling - respecting (current={current_phase}, analyzer={analyzer_phase})")
+        else:
+            # Stay in post_selling - IGNORE analyzer if it says doing_the_ask (we're past that point)
+            phase = "post_selling"
+            ready_for_ask = True  # Still ready for ask in post_selling
+            if Config.DEBUG:
+                print(f"[Orchestrator] Preserving post_selling phase (current={current_phase}, analyzer={analyzer_phase}) - ignoring analyzer's phase suggestion")
+    # Handle transition TO post_selling from doing_the_ask
+    elif current_phase == "doing_the_ask" and analyzer_phase == "post_selling":
+        # Transitioning from doing_the_ask to post_selling (pitch made, user asking questions)
+        phase = "post_selling"
+        ready_for_ask = True
+        if Config.DEBUG:
+            print(f"[Orchestrator] Transitioning to post_selling phase (current={current_phase}, analyzer={analyzer_phase})")
+    # Handle permission gate for building_rapport -> doing_the_ask transition
+    # BUT: Skip this if current_phase is post_selling (already handled above)
+    elif analyzer_phase == "doing_the_ask" and current_phase != "doing_the_ask" and current_phase != "post_selling":
+        # Check if approval is needed for transition to selling phase
+        if current_phase and current_phase != "doing_the_ask" and confirm_phase_change is not True:
             # Need approval - return early with approval request
             if Config.DEBUG:
-                print(f"[Orchestrator] PERMISSION GATE: Approval required for phase transition (current={current_phase}, suggested={suggested_phase})")
+                print(f"[Orchestrator] PERMISSION GATE: Approval required for phase transition (current={current_phase}, suggested={analyzer_phase})")
             return {
                 "status": "approval_required",
                 "suggested_phase": "doing_the_ask",
                 "reasoning": reasoning,
-                "phase": current_phase,  # Stay in current phase until approved
+                "phase": current_phase,
                 "ready_for_ask": False,
                 "instruction_for_writer": "Waiting for approval to transition to selling phase",
                 "knowledge_context": [],
@@ -259,21 +259,25 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
                 "timestamps": {},
             }
         else:
-            # User approved (confirm_phase_change=True) or no gate needed (already in doing_the_ask or phases match)
-            # OR user manually set phase to doing_the_ask
+            # Approved or no gate needed
             phase = "doing_the_ask"
             ready_for_ask = True
             if Config.DEBUG:
-                if manual_phase_override:
-                    print(f"[Orchestrator] PERMISSION GATE: Manual phase override detected - respecting user's phase='doing_the_ask' (analyzer suggested={suggested_phase})")
-                else:
-                    print(f"[Orchestrator] PERMISSION GATE: Approved or no gate needed - phase='doing_the_ask' (current_phase={current_phase})")
-    else:
-        # Analyzer says stay in rapport phase AND no manual override
-        phase = "building_rapport"
-        ready_for_ask = False
+                print(f"[Orchestrator] PERMISSION GATE: Approved or no gate needed - phase='doing_the_ask' (current_phase={current_phase})")
+    # Handle user rejection
+    elif confirm_phase_change is False:
         if Config.DEBUG:
-            print(f"[Orchestrator] Analyzer says move_forward=False -> phase='building_rapport'")
+            print("[Orchestrator] PERMISSION GATE: User rejected phase transition - staying in current phase")
+        phase = current_phase or "building_rapport"
+        ready_for_ask = (phase == "doing_the_ask" or phase == "post_selling")
+        if phase == "building_rapport":
+            instruction_for_writer = "Continue building rapport - ask about their interests, school, or current projects"
+    # Default: use analyzer's phase decision
+    else:
+        phase = analyzer_phase
+        ready_for_ask = (phase == "doing_the_ask" or phase == "post_selling")
+        if Config.DEBUG:
+            print(f"[Orchestrator] Using analyzer's phase decision: {phase}")
     
     # Build intelligent KB query based on conversation content and phase
     kb_query_start = time.time()

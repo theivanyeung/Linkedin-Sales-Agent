@@ -17,7 +17,7 @@ ANALYSIS_SCHEMA: Dict[str, Any] = {
             "reasoning": {"type": "string"},
             "move_forward": {"type": "boolean"},
             "instruction_for_writer": {"type": "string"},
-            "phase": {"type": "string", "enum": ["building_rapport", "doing_the_ask"]},
+            "phase": {"type": "string", "enum": ["building_rapport", "doing_the_ask", "post_selling"]},
         },
         "required": [
             "reasoning",
@@ -40,7 +40,7 @@ def _conversation_to_text(conv: Conversation) -> str:
     return "\n".join(lines)
 
 
-def analyze_conversation(conv: Conversation) -> Dict[str, Any]:
+def analyze_conversation(conv: Conversation, current_phase: str = None) -> Dict[str, Any]:
     """Run a single Responses API call to analyze the conversation."""
     system_prompt = (
         "You are a strategic sales conversation analyst for Prodicity, a selective fellowship for high school students. "
@@ -62,7 +62,9 @@ def analyze_conversation(conv: Conversation) -> Dict[str, Any]:
         "- Your instruction should be: \"Validate their project, then immediately pivot to the Pitch. Do not ask discovery questions.\"\n\n"
         "Phase Guidelines:\n"
         "- 'building_rapport': Early stage, building relationship, asking questions, not selling yet\n"
-        "- 'doing_the_ask': Ready to introduce Prodicity, student is engaged and asking questions\n\n"
+        "- 'doing_the_ask': Ready to introduce Prodicity, student is engaged and asking questions\n"
+        "- 'post_selling': The pitch has already been made. User is asking questions (price, details, logistics). We are clarifying, not introducing.\n"
+        "CRITICAL: 'post_selling' is a ONE-WAY phase. Once you are in 'post_selling', you MUST stay in 'post_selling'. You can NEVER go back to 'doing_the_ask' or 'building_rapport' from 'post_selling'.\n\n"
         "SILENT OBJECTION DETECTION & STRATEGY (Priority 2 - only if no direct question):\n\n"
         "Analyze the prospect's text for these specific hidden barriers ONLY if they haven't asked a direct question. If detected, set the 'instruction_for_writer' to the corresponding TACTIC.\n\n"
         "1. THE \"BUSY\" OBJECTION (Time/Stress)\n"
@@ -139,13 +141,17 @@ def analyze_conversation(conv: Conversation) -> Dict[str, Any]:
         "   - 'IMPOSTER OBJECTION: Reassure that Prodicity helps them find and start projects - no expertise needed.'\n"
         "   - 'They're showing interest - introduce Prodicity naturally by connecting it to their mentioned project.'\n"
         "   - 'Continue building rapport - ask about their school or current projects to deepen the relationship.'\n\n"
-        "4. PHASE: Determine the conversation phase based on your move_forward decision:\n"
-        "   - If move_forward is True, set phase to 'doing_the_ask'\n"
-        "   - If move_forward is False, set phase to 'building_rapport'\n\n"
+        "4. PHASE: Determine the conversation phase based on your move_forward decision and conversation state:\n"
+        "   - CRITICAL RULE #1: If current phase is 'post_selling', you MUST set phase to 'post_selling'. This is a one-way phase - once in post_selling, you NEVER go back to 'doing_the_ask' or 'building_rapport' (unless explicitly transitioning away, which is rare).\n"
+        "   - If move_forward is False, set phase to 'building_rapport'\n"
+        "   - If move_forward is True AND you have NOT yet pitched Prodicity (check conversation for pitch indicators: 'Prodicity', 'fellowship', 'application', 'Stanford/MIT mentors'), set phase to 'doing_the_ask'\n"
+        "   - If move_forward is True AND you have ALREADY pitched Prodicity (found pitch indicators in conversation history) AND the user is asking follow-up questions, set phase to 'post_selling'\n"
+        "   - If current phase is 'doing_the_ask' AND user asks a question after you've pitched (pitch indicators found), set phase to 'post_selling'\n\n"
         f"Conversation context:\n"
         f"- Title: {conv.title}\n"
         f"- Total messages: {total_messages} (Prospect: {prospect_messages})\n"
-        f"- Description: {conv.description or 'None'}\n\n"
+        f"- Description: {conv.description or 'None'}\n"
+        f"- Current phase: {current_phase or 'unknown'}\n\n"
         f"Recent conversation:\n{_conversation_to_text(conv)}\n\n"
         "Strategic Guidelines:\n"
         "- Think contextually: Don't rely on rigid message counts. A highly engaged student might be ready after 3 messages, "

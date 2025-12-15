@@ -194,9 +194,9 @@ class DOMExtractor {
       this.addConsoleLog("AI", "Service healthy", {});
 
       // Generate
-      // If user manually set phase to "doing_the_ask", respect it by setting confirm_phase_change
+      // If user manually set phase to "doing_the_ask" or "post_selling", respect it by setting confirm_phase_change
       // This tells the orchestrator to respect the manual phase change even if analyzer disagrees
-      if (convo.phase === "doing_the_ask") {
+      if (convo.phase === "doing_the_ask" || convo.phase === "post_selling") {
         convo.confirm_phase_change = true;
         this.addConsoleLog(
           "AI",
@@ -222,12 +222,16 @@ class DOMExtractor {
         this.setStatus("Waiting", "Approval required for phase transition...");
         const approved = await this.showPhaseApprovalDialog(
           aiResult.reasoning,
-          aiResult.suggested_phase
+          aiResult.suggested_phase,
+          convo.phase
         );
 
         // Update phase in Supabase based on decision
         if (approved) {
-          await this.updatePhaseInSupabase(threadId, "doing_the_ask");
+          await this.updatePhaseInSupabase(
+            threadId,
+            aiResult.suggested_phase || "doing_the_ask"
+          );
           // Re-call with approval
           const convoUpdated = await this.supabaseService.getConversation(
             threadId
@@ -238,7 +242,10 @@ class DOMExtractor {
             convoUpdated.prospectName || convoUpdated.title || ""
           );
         } else {
-          await this.updatePhaseInSupabase(threadId, "building_rapport");
+          await this.updatePhaseInSupabase(
+            threadId,
+            convo.phase || "building_rapport"
+          );
           // Re-call with rejection
           const convoUpdated = await this.supabaseService.getConversation(
             threadId
@@ -272,8 +279,21 @@ class DOMExtractor {
       this.updatePhaseDisplay(aiResult.phase);
 
       // Update phase in Supabase if it changed
+      // BUT: Never overwrite post_selling with a different phase (it's a one-way phase)
       if (aiResult.phase && convo.phase !== aiResult.phase) {
-        await this.updatePhaseInSupabase(threadId, aiResult.phase);
+        // If current phase is post_selling, preserve it (don't let AI change it)
+        if (convo.phase === "post_selling") {
+          this.addConsoleLog(
+            "AI",
+            "Preserving post_selling phase - not overwriting with AI suggestion",
+            {
+              aiSuggestedPhase: aiResult.phase,
+              preservedPhase: convo.phase,
+            }
+          );
+        } else {
+          await this.updatePhaseInSupabase(threadId, aiResult.phase);
+        }
       }
 
       // Copy to clipboard (silently handle errors - don't show in status)
@@ -533,7 +553,11 @@ class DOMExtractor {
       this.setStatus(
         "Success",
         `Phase updated to ${
-          newPhase === "doing_the_ask" ? "Selling Phase" : "Building Rapport"
+          newPhase === "doing_the_ask"
+            ? "Selling Phase"
+            : newPhase === "post_selling"
+            ? "Post-Selling / Q&A"
+            : "Building Rapport"
         }`
       );
       this.addConsoleLog("DB", "Phase manually changed", {
@@ -706,8 +730,17 @@ class DOMExtractor {
 
     if (phase) {
       const phaseText =
-        phase === "doing_the_ask" ? "Selling Phase" : "Building Rapport";
-      const phaseColor = phase === "doing_the_ask" ? "#f39c12" : "#8ab4ff";
+        phase === "doing_the_ask"
+          ? "Selling Phase"
+          : phase === "post_selling"
+          ? "Post-Selling / Q&A"
+          : "Building Rapport";
+      const phaseColor =
+        phase === "doing_the_ask"
+          ? "#f39c12"
+          : phase === "post_selling"
+          ? "#22c55e" // green for Q&A phase
+          : "#8ab4ff";
       phaseValueEl.textContent = phaseText;
       phaseValueEl.style.color = phaseColor;
       phaseEl.style.display = "block";
@@ -725,7 +758,43 @@ class DOMExtractor {
    * Show approval dialog for phase transition
    * Returns a promise that resolves to true if approved, false if rejected
    */
-  async showPhaseApprovalDialog(reasoning, suggestedPhase) {
+  async showPhaseApprovalDialog(
+    reasoning,
+    suggestedPhase,
+    currentPhase = null
+  ) {
+    // Get current phase if not provided
+    if (!currentPhase) {
+      const threadId = this.lastThreadId;
+      if (threadId) {
+        try {
+          const convo = await this.supabaseService.getConversation(threadId);
+          currentPhase = convo?.phase || "building_rapport";
+        } catch (e) {
+          currentPhase = "building_rapport";
+        }
+      } else {
+        currentPhase = "building_rapport";
+      }
+    }
+
+    const getPhaseDisplayName = (phase) => {
+      if (phase === "doing_the_ask") return "Selling Phase";
+      if (phase === "post_selling") return "Post-Selling / Q&A";
+      return "Building Rapport";
+    };
+
+    const getPhaseColor = (phase) => {
+      if (phase === "doing_the_ask") return "#f39c12";
+      if (phase === "post_selling") return "#22c55e";
+      return "#8ab4ff";
+    };
+
+    const currentPhaseName = getPhaseDisplayName(currentPhase);
+    const suggestedPhaseName = getPhaseDisplayName(suggestedPhase);
+    const currentPhaseColor = getPhaseColor(currentPhase);
+    const suggestedPhaseColor = getPhaseColor(suggestedPhase);
+
     return new Promise((resolve) => {
       // Create modal overlay
       const overlay = document.createElement("div");
@@ -763,7 +832,7 @@ class DOMExtractor {
             <span>Phase Transition Approval</span>
           </div>
           <div style="font-size: 13px; color: #9aa7b2; margin-top: 4px;">
-            The AI wants to transition from <strong style="color: #8ab4ff;">Building Rapport</strong> to <strong style="color: #f39c12;">Selling Phase</strong>.
+            The AI wants to transition from <strong style="color: ${currentPhaseColor};">${currentPhaseName}</strong> to <strong style="color: ${suggestedPhaseColor};">${suggestedPhaseName}</strong>.
           </div>
         </div>
         <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 12px; margin: 12px 0; font-size: 13px; color: #c9d1d9; line-height: 1.5;">
@@ -1477,12 +1546,16 @@ class DOMExtractor {
         this.setStatus("Waiting", "Approval required for phase transition...");
         const approved = await this.showPhaseApprovalDialog(
           aiResult.reasoning,
-          aiResult.suggested_phase
+          aiResult.suggested_phase,
+          convo.phase
         );
 
         // Update phase in Supabase based on decision
         if (approved) {
-          await this.updatePhaseInSupabase(threadId, "doing_the_ask");
+          await this.updatePhaseInSupabase(
+            threadId,
+            aiResult.suggested_phase || "doing_the_ask"
+          );
           // Re-call with approval
           const convoUpdated = await this.supabaseService.getConversation(
             threadId
@@ -1512,12 +1585,25 @@ class DOMExtractor {
       }
 
       // Update phase in Supabase if it changed
+      // BUT: Never overwrite post_selling with a different phase (it's a one-way phase)
       if (aiResult && aiResult.phase && threadId) {
         const currentConvo = await this.supabaseService.getConversation(
           threadId
         );
         if (currentConvo && currentConvo.phase !== aiResult.phase) {
-          await this.updatePhaseInSupabase(threadId, aiResult.phase);
+          // If current phase is post_selling, preserve it (don't let AI change it)
+          if (currentConvo.phase === "post_selling") {
+            this.addConsoleLog(
+              "AI",
+              "Preserving post_selling phase - not overwriting with AI suggestion",
+              {
+                aiSuggestedPhase: aiResult.phase,
+                preservedPhase: currentConvo.phase,
+              }
+            );
+          } else {
+            await this.updatePhaseInSupabase(threadId, aiResult.phase);
+          }
         }
       }
 
@@ -1616,12 +1702,16 @@ class DOMExtractor {
         this.setStatus("Waiting", "Approval required for phase transition...");
         const approved = await this.showPhaseApprovalDialog(
           aiResult.reasoning,
-          aiResult.suggested_phase
+          aiResult.suggested_phase,
+          conversationData.phase
         );
 
         // Update phase in Supabase based on decision
         if (approved) {
-          await this.updatePhaseInSupabase(threadId, "doing_the_ask");
+          await this.updatePhaseInSupabase(
+            threadId,
+            aiResult.suggested_phase || "doing_the_ask"
+          );
           // Re-call with approval
           const convoUpdated = await this.supabaseService.getConversation(
             threadId
@@ -1632,7 +1722,10 @@ class DOMExtractor {
             convoUpdated.prospectName || convoUpdated.title || ""
           );
         } else {
-          await this.updatePhaseInSupabase(threadId, "building_rapport");
+          await this.updatePhaseInSupabase(
+            threadId,
+            conversationData.phase || "building_rapport"
+          );
           // Re-call with rejection
           const convoUpdated = await this.supabaseService.getConversation(
             threadId
@@ -1658,8 +1751,21 @@ class DOMExtractor {
       });
 
       // Update phase in Supabase if it changed
+      // BUT: Never overwrite post_selling with a different phase (it's a one-way phase)
       if (aiResult.phase && conversationData.phase !== aiResult.phase) {
-        await this.updatePhaseInSupabase(threadId, aiResult.phase);
+        // If current phase is post_selling, preserve it (don't let AI change it)
+        if (conversationData.phase === "post_selling") {
+          this.addConsoleLog(
+            "AI",
+            "Preserving post_selling phase - not overwriting with AI suggestion",
+            {
+              aiSuggestedPhase: aiResult.phase,
+              preservedPhase: conversationData.phase,
+            }
+          );
+        } else {
+          await this.updatePhaseInSupabase(threadId, aiResult.phase);
+        }
       }
 
       // Show suggested response in the top bar (same as manual generation)
@@ -2196,12 +2302,16 @@ class DOMExtractor {
       this.setStatus("Waiting", "Approval required for phase transition...");
       const approved = await this.showPhaseApprovalDialog(
         aiResult.reasoning,
-        aiResult.suggested_phase
+        aiResult.suggested_phase,
+        convo.phase
       );
 
       // Update phase in Supabase based on decision
       if (approved) {
-        await this.updatePhaseInSupabase(threadId, "doing_the_ask");
+        await this.updatePhaseInSupabase(
+          threadId,
+          aiResult.suggested_phase || "doing_the_ask"
+        );
         // Re-call with approval
         const convoUpdated = await this.supabaseService.getConversation(
           threadId
@@ -2212,7 +2322,10 @@ class DOMExtractor {
           convoUpdated.prospectName || convoUpdated.title || ""
         );
       } else {
-        await this.updatePhaseInSupabase(threadId, "building_rapport");
+        await this.updatePhaseInSupabase(
+          threadId,
+          convo.phase || "building_rapport"
+        );
         // Re-call with rejection
         const convoUpdated = await this.supabaseService.getConversation(
           threadId

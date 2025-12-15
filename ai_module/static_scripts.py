@@ -168,6 +168,22 @@ PHASE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "Support with social proof or a friendly CTA when appropriate.",
         ],
     },
+    "post_selling": {
+        "name": "Post-Selling / Q&A",
+        "summary": "Answer questions, handle objections, and guide towards the application after the initial pitch.",
+        "sections": {
+            "guidance_shell": {
+                "description": "Dynamic Q&A phase. Relies on Knowledge Base.",
+                "script": "" 
+            }
+        },
+        "guidelines": [
+            "You have ALREADY pitched Prodicity. Do NOT repeat the introduction script.",
+            "Your goal is to ANSWER the user's specific question using the Knowledge Base.",
+            "Keep answers concise and direct.",
+            "After answering, ask a simple check-in question (e.g., 'Does that help?', 'Is that clear?')."
+        ],
+    },
 }
 
 
@@ -433,6 +449,12 @@ def get_conversation_guidance(
                 "examples": get_prodicity_examples(),
             }
         )
+    elif phase == "post_selling":
+        guidance.update({
+            "next_step": "Answer questions using Knowledge Base and guide to application if ready.",
+            "context_to_use": "User has already been pitched. Focus on Q&A.",
+            "cta_if_ready": get_application_info(),
+        })
 
     return guidance
 
@@ -452,5 +474,13 @@ def get_phase_specific_context(phase: str) -> str:
             "in a way that's relevant to what they've shared, highlight the fit, and guide them "
             "toward the application. Reference specific things they've told you. When they show "
             "interest, provide the application link and deadline information."
+        )
+    if phase == "post_selling":
+        return (
+            "You are in the POST-SELLING phase. You have already pitched Prodicity. "
+            "The user is asking follow-up questions (Price, details, logistics). "
+            "Do NOT re-introduce the program. "
+            "Use the KNOWLEDGE BASE context to answer their question DIRECTLY and ACCURATELY. "
+            "Keep it short. End with a check-in question."
         )
     return f"You are in the {phase} phase."

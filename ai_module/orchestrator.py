@@ -230,6 +230,22 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
             ready_for_ask = True  # Still ready for ask in post_selling
             if Config.DEBUG:
                 print(f"[Orchestrator] Preserving post_selling phase (current={current_phase}, analyzer={analyzer_phase}) - ignoring analyzer's phase suggestion")
+    # CRITICAL: Preserve doing_the_ask phase if manually set (user manually switched to selling phase)
+    # If user manually set phase to doing_the_ask (indicated by confirm_phase_change=True), preserve it
+    elif current_phase == "doing_the_ask" and confirm_phase_change is True:
+        # User manually set phase to doing_the_ask - preserve it even if analyzer disagrees
+        phase = "doing_the_ask"
+        ready_for_ask = True
+        if Config.DEBUG:
+            print(f"[Orchestrator] Preserving manually set doing_the_ask phase (current={current_phase}, analyzer={analyzer_phase}, confirm_phase_change={confirm_phase_change})")
+    # CRITICAL: Preserve doing_the_ask phase if manually set (user manually switched to selling phase)
+    # If user manually set phase to doing_the_ask (indicated by confirm_phase_change=True), preserve it
+    elif current_phase == "doing_the_ask" and confirm_phase_change is True:
+        # User manually set phase to doing_the_ask - preserve it even if analyzer disagrees
+        phase = "doing_the_ask"
+        ready_for_ask = True
+        if Config.DEBUG:
+            print(f"[Orchestrator] Preserving manually set doing_the_ask phase (current={current_phase}, analyzer={analyzer_phase}, confirm_phase_change={confirm_phase_change})")
     # Handle transition TO post_selling from doing_the_ask
     elif current_phase == "doing_the_ask" and analyzer_phase == "post_selling":
         # Transitioning from doing_the_ask to post_selling (pitch made, user asking questions)
@@ -238,7 +254,7 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
         if Config.DEBUG:
             print(f"[Orchestrator] Transitioning to post_selling phase (current={current_phase}, analyzer={analyzer_phase})")
     # Handle permission gate for building_rapport -> doing_the_ask transition
-    # BUT: Skip this if current_phase is post_selling (already handled above)
+    # BUT: Skip this if current_phase is post_selling or doing_the_ask (already handled above)
     elif analyzer_phase == "doing_the_ask" and current_phase != "doing_the_ask" and current_phase != "post_selling":
         # Check if approval is needed for transition to selling phase
         if current_phase and current_phase != "doing_the_ask" and confirm_phase_change is not True:

@@ -93,41 +93,12 @@ class SupabaseService {
       // Check if conversation exists
       const existing = await this.getConversation(conversationData.threadId);
       if (existing) {
-        // CRITICAL FIX: Validate that we're not mixing messages from different conversations
-        // If this is a manual update (indicated by forceReplace flag) or if there's a mismatch,
-        // replace all messages instead of merging to prevent cross-thread contamination
-
+        // Check if forceReplace is set - if so, replace all messages without merging
         const shouldReplaceAll = conversationData.forceReplace || false;
-        let combined = null; // Will be set if we successfully merge, null means replace all
 
-        // Check for potential cross-thread contamination:
-        // 1. If existing has messages but new extraction has none, something's wrong
-        // 2. If title/name changed significantly, might be different person
-        const existingTitle = (existing.title || "").trim().toLowerCase();
-        const newTitle = (conversationData.title || "").trim().toLowerCase();
-        const titleChanged =
-          existingTitle &&
-          newTitle &&
-          existingTitle !== newTitle &&
-          existingTitle !== "unknown" &&
-          newTitle !== "unknown";
-
-        // If title changed significantly, replace all to avoid mixing conversations
-        if (titleChanged && !shouldReplaceAll) {
-          if (window.uiConsoleLog) {
-            window.uiConsoleLog(
-              "DB",
-              "Title mismatch detected - replacing all messages",
-              {
-                existingTitle: existing.title,
-                newTitle: conversationData.title,
-                threadId: conversationData.threadId,
-              }
-            );
-          }
-          // combined remains null, will replace all
-        } else if (shouldReplaceAll) {
-          // Manual update requested - replace all messages
+        let merged;
+        if (shouldReplaceAll) {
+          // Force replace: use new messages directly, no merging
           if (window.uiConsoleLog) {
             window.uiConsoleLog(
               "DB",
@@ -139,9 +110,18 @@ class SupabaseService {
               }
             );
           }
-          // combined remains null, will replace all
+          // Use newMsgs directly
+          merged = newMsgs.map((m, i) => ({
+            index: i,
+            text: m.text || "",
+            sender: m.sender || "prospect",
+            attachments: Array.isArray(m.attachments) ? m.attachments : [],
+            reactions: Array.isArray(m.reactions) ? m.reactions : [],
+            mentions: Array.isArray(m.mentions) ? m.mentions : [],
+            links: Array.isArray(m.links) ? m.links : [],
+          }));
         } else {
-          // Safe merge: only merge if we have overlap and titles match
+          // Smarter merge to preserve chronology across partial loads
           const existingMsgs = Array.isArray(existing.messages)
             ? existing.messages.map(normalizeMessage)
             : [];
@@ -179,13 +159,8 @@ class SupabaseService {
           const overlap = new Set(newOrder.filter((sig) => oldBySig.has(sig)));
           const onlyOld = oldOrder.filter((sig) => !newBySig.has(sig));
 
-          // Only merge if we have significant overlap (at least 30% of messages match)
-          // This prevents mixing messages from completely different conversations
-          const overlapRatio = overlap.size / Math.max(newOrder.length, 1);
-          const hasSignificantOverlap =
-            overlapRatio >= 0.3 || overlap.size >= 3;
-
-          if (hasSignificantOverlap && overlap.size > 0) {
+          let combined = [];
+          if (overlap.size > 0) {
             // Compute min/max old positions of overlap to split old-only into older/newer buckets
             let minOldOverlap = Infinity;
             let maxOldOverlap = -Infinity;
@@ -217,33 +192,30 @@ class SupabaseService {
 
             combined = [...olderOnly, ...coreNew, ...newerOnly];
           } else {
-            // No significant overlap - likely different conversation, replace all
-            if (window.uiConsoleLog) {
-              window.uiConsoleLog(
-                "DB",
-                "Low overlap - replacing all messages",
-                {
-                  overlapCount: overlap.size,
-                  overlapRatio: overlapRatio,
-                  threadId: conversationData.threadId,
-                }
-              );
-            }
-            // combined remains null, will replace all
+            // No overlap: keep existing in place, append latest extraction at the end
+            const coreNew = newOrder
+              .map((sig) => newBySig.get(sig)?.msg)
+              .filter(Boolean);
+            const restOld = onlyOld
+              .sort(
+                (a, b) =>
+                  (oldBySig.get(a)?.pos ?? 0) - (oldBySig.get(b)?.pos ?? 0)
+              )
+              .map((sig) => oldBySig.get(sig).msg);
+            combined = [...restOld, ...coreNew];
           }
-        }
 
-        // Reindex and strictly map to minimal schema
-        // If combined is null, use newMsgs directly (replace all)
-        const merged = (combined || newMsgs).map((m, i) => ({
-          index: i,
-          text: m.text || "",
-          sender: m.sender || "prospect",
-          attachments: Array.isArray(m.attachments) ? m.attachments : [],
-          reactions: Array.isArray(m.reactions) ? m.reactions : [],
-          mentions: Array.isArray(m.mentions) ? m.mentions : [],
-          links: Array.isArray(m.links) ? m.links : [],
-        }));
+          // Reindex and strictly map to minimal schema
+          merged = combined.map((m, i) => ({
+            index: i,
+            text: m.text || "",
+            sender: m.sender || "prospect",
+            attachments: Array.isArray(m.attachments) ? m.attachments : [],
+            reactions: Array.isArray(m.reactions) ? m.reactions : [],
+            mentions: Array.isArray(m.mentions) ? m.mentions : [],
+            links: Array.isArray(m.links) ? m.links : [],
+          }));
+        }
 
         // IMPORTANT: Always use placeholders from conversationData (extracted from message)
         // DO NOT merge with existing placeholders - they might be from profile data
@@ -292,6 +264,9 @@ class SupabaseService {
               ? basePayload.description.substring(0, 100) + "..."
               : "none",
             messageCount: basePayload.message_count,
+            existingMessageCount: existing.messages?.length || 0,
+            newMessageCount: newMsgs.length,
+            forceReplace: shouldReplaceAll,
             url: basePayload.url,
             status: basePayload.status,
             placeholders: basePayload.placeholders,

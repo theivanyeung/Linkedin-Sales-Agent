@@ -599,9 +599,15 @@
         const msg = messages[i];
         const text = msg.text || "";
 
+        // ONLY check messages from "you" for initial message pattern
+        // Prospect messages can say anything and shouldn't trigger contamination detection
+        const isFromYou = msg.sender === "you";
+
         // Check if this is an initial message (starts with "hey [name]")
-        // Check BOTH from "you" and "prospect" - sometimes sender detection is wrong
-        const initialMatch = text.match(initialMessagePattern);
+        // Only check messages from "you" - prospect messages can say anything
+        const initialMatch = isFromYou
+          ? text.match(initialMessagePattern)
+          : null;
         if (initialMatch) {
           const mentionedName = initialMatch[1].trim().toLowerCase();
           const mentionedNameWords = mentionedName
@@ -628,7 +634,7 @@
             ) {
               nameMatches = true;
             }
-            // Word-based match (handles "Vivaan" vs "Vivaan Kumar")
+            // Word-based match (handles "Vivaan" vs "Vivaan Kumar", "Avika" vs "Avika Agarwal")
             else if (
               mentionedNameWords.length > 0 &&
               currentProspectNameWords.length > 0
@@ -648,24 +654,47 @@
           }
 
           // If we have a prospect name and this initial message doesn't match, it's contamination
+          // BUT: Only stop if we're VERY confident it's a mismatch
+          // Don't stop on partial matches or if the name is too short (could be a typo or nickname)
           if (
             currentProspectName !== "unknown" &&
             currentProspectName.length > 0 &&
-            !nameMatches
+            !nameMatches &&
+            mentionedNameWords.length > 0 &&
+            currentProspectNameWords.length > 0 &&
+            mentionedName.length >= 3 && // Only check if mentioned name is at least 3 chars
+            currentProspectName.length >= 3 // Only check if prospect name is at least 3 chars
           ) {
-            const warningMsg = `CROSS-THREAD CONTAMINATION DETECTED at message ${i}: Initial message mentions "${mentionedName}" but conversation is with "${currentProspectName}". Stopping extraction here.`;
-            // STEALTH: No console logging - warnings sent to popup UI only
-            warnings.push({
-              tag: "WARNING",
-              message: warningMsg,
-              meta: {
-                messageIndex: i,
-                mentionedName: mentionedName,
-                currentProspectName: currentProspectName,
-                action: "Stopped extraction to prevent contamination",
-              },
-            });
-            break; // Stop extracting - we've hit messages from a different thread
+            // Double-check: make sure there's NO common word at all before stopping
+            const hasAnyCommonWord = mentionedNameWords.some((word) =>
+              currentProspectNameWords.some(
+                (cWord) =>
+                  word === cWord || word.includes(cWord) || cWord.includes(word)
+              )
+            );
+
+            // Also check if the mentioned name is clearly a different person
+            // (e.g., "John" vs "Avika" - completely different, not just a variation)
+            const isClearlyDifferent =
+              !hasAnyCommonWord &&
+              mentionedName.length >= 3 &&
+              currentProspectName.length >= 3;
+
+            if (isClearlyDifferent) {
+              const warningMsg = `CROSS-THREAD CONTAMINATION DETECTED at message ${i}: Initial message mentions "${mentionedName}" but conversation is with "${currentProspectName}". Stopping extraction here.`;
+              // STEALTH: No console logging - warnings sent to popup UI only
+              warnings.push({
+                tag: "WARNING",
+                message: warningMsg,
+                meta: {
+                  messageIndex: i,
+                  mentionedName: mentionedName,
+                  currentProspectName: currentProspectName,
+                  action: "Stopped extraction to prevent contamination",
+                },
+              });
+              break; // Stop extracting - we've hit messages from a different thread
+            }
           }
 
           // Track first initial name for comparison
@@ -855,6 +884,52 @@
           extractionInProgress = false;
           sendResponse({
             error: error.message || "Extraction failed",
+          });
+        }
+      });
+
+      return true; // Keep channel open for async response
+    }
+
+    if (request.action === "extractThreadDOM") {
+      // Extract just the HTML of the conversation thread element
+      requestAnimationFrame(async () => {
+        try {
+          // Wait a moment to ensure page is loaded
+          await new Promise((resolve) => setTimeout(resolve, 300));
+
+          // Find the conversation thread element (same logic as extractConversationData)
+          let activeConversationThread = document.querySelector(
+            ".msg-convo-wrapper.msg-thread"
+          );
+
+          if (!activeConversationThread) {
+            try {
+              activeConversationThread = await waitForElement(
+                ".msg-convo-wrapper.msg-thread",
+                10,
+                200
+              );
+            } catch (e) {
+              activeConversationThread =
+                document.querySelector(
+                  "[class*='msg-thread'][class*='msg-convo-wrapper']"
+                ) || document.querySelector("[class*='msg-thread']");
+            }
+          }
+
+          if (!activeConversationThread) {
+            sendResponse({ error: "Conversation thread element not found" });
+            return;
+          }
+
+          // Get the HTML of the thread element
+          const html = activeConversationThread.outerHTML;
+
+          sendResponse({ html, success: true });
+        } catch (error) {
+          sendResponse({
+            error: error.message || "Failed to extract thread DOM",
           });
         }
       });

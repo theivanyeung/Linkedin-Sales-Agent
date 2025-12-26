@@ -676,7 +676,32 @@
     </div>
 
     <div class="status" id="consolePanel" style="margin-top: 14px">
-      <div class="status-text">Console</div>
+      <div
+        class="status-text"
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        "
+      >
+        <span>Console</span>
+        <button
+          id="extractDOMBtn"
+          class="btn btn-ghost btn-small"
+          style="
+            font-size: 11px;
+            padding: 4px 8px;
+            min-width: auto;
+            width: auto;
+            flex-shrink: 0;
+            white-space: nowrap;
+          "
+          title="Extract conversation thread DOM"
+        >
+          📄 Extract Thread DOM
+        </button>
+      </div>
       <div class="status-details" style="color: #9fc2ff">Live logs</div>
       <div
         class="status-details"

@@ -41,6 +41,13 @@ class DOMExtractor {
       });
     }
 
+    const extractDOMBtn = document.getElementById("extractDOMBtn");
+    if (extractDOMBtn) {
+      extractDOMBtn.addEventListener("click", () => {
+        this.extractThreadDOM();
+      });
+    }
+
     // Single generate button handles fetching from cloud and injecting
     const prevBtn = document.getElementById("prevRespBtn");
     const nextBtn = document.getElementById("nextRespBtn");
@@ -988,6 +995,68 @@ class DOMExtractor {
         extractBtn.textContent = originalText;
         extractBtn.disabled = false;
         this.setStatus("Ready", "LinkedIn page detected");
+      }, 2000);
+    }
+  }
+
+  async extractThreadDOM() {
+    const extractDOMBtn = document.getElementById("extractDOMBtn");
+    const originalText = extractDOMBtn.textContent;
+
+    extractDOMBtn.disabled = true;
+    extractDOMBtn.textContent = "Extracting...";
+    this.addConsoleLog("DOM", "Extracting conversation thread DOM...", {});
+
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!tab || !tab.url || !tab.url.includes("linkedin.com/messaging")) {
+        throw new Error("Not on a LinkedIn messaging page");
+      }
+
+      // Send message to content script to extract thread DOM
+      const result = await chrome.tabs.sendMessage(tab.id, {
+        action: "extractThreadDOM",
+      });
+
+      if (!result) {
+        throw new Error("No response from content script");
+      }
+
+      if (result.error) {
+        throw new Error(`DOM extraction failed: ${result.error}`);
+      }
+
+      // Get thread ID from URL
+      const threadId = tab.url.match(/\/thread\/([^\/\?]+)/)?.[1] || "unknown";
+
+      // Download the HTML
+      await this.downloadHTML(result.html, threadId, "thread");
+
+      this.addConsoleLog("DOM", "Thread DOM extracted and downloaded", {
+        threadId,
+        htmlLength: result.html.length,
+      });
+
+      extractDOMBtn.textContent = "✅ Extracted!";
+
+      setTimeout(() => {
+        extractDOMBtn.textContent = "📄 Extract Thread DOM";
+        extractDOMBtn.disabled = false;
+      }, 2000);
+    } catch (error) {
+      console.error("Error extracting thread DOM:", error);
+      this.addConsoleLog("ERROR", "Failed to extract thread DOM", {
+        error: error.message,
+      });
+      extractDOMBtn.textContent = "❌ Error";
+
+      setTimeout(() => {
+        extractDOMBtn.textContent = "📄 Extract Thread DOM";
+        extractDOMBtn.disabled = false;
       }, 2000);
     }
   }
@@ -2194,6 +2263,11 @@ class DOMExtractor {
           url: convo.url,
           messageCount: convo.messages?.length || 0,
           forceReplace: true,
+          messagesPreview: convo.messages?.slice(0, 3).map((m) => ({
+            index: m.index,
+            sender: m.sender,
+            textPreview: m.text?.substring(0, 50) + "...",
+          })),
         });
 
         try {

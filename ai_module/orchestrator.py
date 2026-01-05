@@ -253,11 +253,21 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
         ready_for_ask = True
         if Config.DEBUG:
             print(f"[Orchestrator] Transitioning to post_selling phase (current={current_phase}, analyzer={analyzer_phase})")
+    # Handle user rejection - check this BEFORE the approval gate
+    elif confirm_phase_change is False:
+        if Config.DEBUG:
+            print("[Orchestrator] PERMISSION GATE: User rejected phase transition - staying in current phase")
+        phase = current_phase or "building_rapport"
+        ready_for_ask = (phase == "doing_the_ask" or phase == "post_selling")
+        if phase == "building_rapport":
+            instruction_for_writer = "Continue building rapport - ask about their interests, school, or current projects"
     # Handle permission gate for building_rapport -> doing_the_ask transition
     # BUT: Skip this if current_phase is post_selling or doing_the_ask (already handled above)
+    # NOTE: This only checks for approval if confirm_phase_change is None (not yet decided)
     elif analyzer_phase == "doing_the_ask" and current_phase != "doing_the_ask" and current_phase != "post_selling":
         # Check if approval is needed for transition to selling phase
-        if current_phase and current_phase != "doing_the_ask" and confirm_phase_change is not True:
+        # Only ask for approval if confirm_phase_change is None (not yet decided)
+        if current_phase and current_phase != "doing_the_ask" and confirm_phase_change is None:
             # Need approval - return early with approval request
             if Config.DEBUG:
                 print(f"[Orchestrator] PERMISSION GATE: Approval required for phase transition (current={current_phase}, suggested={analyzer_phase})")
@@ -275,19 +285,11 @@ def run_pipeline(conv: Conversation, current_phase: str = None, confirm_phase_ch
                 "timestamps": {},
             }
         else:
-            # Approved or no gate needed
+            # Approved (confirm_phase_change is True) or no gate needed
             phase = "doing_the_ask"
             ready_for_ask = True
             if Config.DEBUG:
                 print(f"[Orchestrator] PERMISSION GATE: Approved or no gate needed - phase='doing_the_ask' (current_phase={current_phase})")
-    # Handle user rejection
-    elif confirm_phase_change is False:
-        if Config.DEBUG:
-            print("[Orchestrator] PERMISSION GATE: User rejected phase transition - staying in current phase")
-        phase = current_phase or "building_rapport"
-        ready_for_ask = (phase == "doing_the_ask" or phase == "post_selling")
-        if phase == "building_rapport":
-            instruction_for_writer = "Continue building rapport - ask about their interests, school, or current projects"
     # Default: use analyzer's phase decision
     else:
         phase = analyzer_phase

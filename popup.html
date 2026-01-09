@@ -292,13 +292,15 @@
       }
       #kbToggleIcon,
       #scriptsToggleIcon,
-      #placeholdersToggleIcon {
+      #placeholdersToggleIcon,
+      #followUpToggleIcon {
         font-size: 12px;
         transition: transform 0.15s ease;
       }
       #kbToggleIcon.open,
       #scriptsToggleIcon.open,
-      #placeholdersToggleIcon.open {
+      #placeholdersToggleIcon.open,
+      #followUpToggleIcon.open {
         transform: rotate(90deg);
       }
       .kb-field {
@@ -675,6 +677,35 @@
       </div>
     </div>
 
+    <div class="status" id="followUpPanel" style="margin-top: 12px">
+      <button class="collapsible" id="followUpToggle">
+        <span id="followUpToggleIcon">▶</span>
+        <span>Follow-Ups</span>
+        <span
+          id="followUpCount"
+          style="
+            margin-left: auto;
+            font-size: 11px;
+            color: #9aa7b2;
+            font-weight: normal;
+          "
+          >0</span
+        >
+      </button>
+      <div id="followUpContent" class="collapsible-content">
+        <div
+          class="status-details"
+          id="followUpStatusMessage"
+          style="margin-bottom: 10px"
+        >
+          Conversations from last week and earlier that need follow-up.
+        </div>
+        <div id="followUpList">
+          <div class="status-details" style="color: #9aa7b2">Loading...</div>
+        </div>
+      </div>
+    </div>
+
     <div class="status" id="consolePanel" style="margin-top: 14px">
       <div
         class="status-text"
@@ -721,6 +752,7 @@
     <!-- Supabase Config -->
     <script src="supabase-config.js"></script>
     <script src="supabase-service.js"></script>
+    <script src="follow_up.js"></script>
     <script src="ai-service.js"></script>
 
     <!-- Main App -->

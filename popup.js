@@ -3,10 +3,12 @@ class DOMExtractor {
   constructor() {
     this.supabaseService = new SupabaseService();
     this.aiService = new AIService();
+    this.followUpService = new FollowUpService();
     this.lastThreadId = null;
     this.consoleEntries = [];
     this.responseHistoryByThread = {};
     this.kbStatusEl = null;
+    this.followUpConversations = []; // Store loaded follow-up conversations
     this.init();
   }
 
@@ -76,6 +78,11 @@ class DOMExtractor {
       placeholdersToggle.addEventListener("click", () =>
         this.togglePlaceholders()
       );
+    }
+
+    const followUpToggle = document.getElementById("followUpToggle");
+    if (followUpToggle) {
+      followUpToggle.addEventListener("click", () => this.toggleFollowUp());
     }
 
     this.kbStatusEl = document.getElementById("kbStatusMessage");
@@ -1901,6 +1908,16 @@ class DOMExtractor {
       if (!threadId) return;
 
       const changed = threadId && threadId !== this.lastThreadId;
+
+      // If conversation changed, check if it's in follow-up list and remove it
+      if (changed && this.followUpConversations && this.followUpConversations.length > 0) {
+        const isInFollowUpList = this.followUpConversations.some(
+          (c) => c.thread_id === threadId
+        );
+        if (isInFollowUpList) {
+          this.removeFollowUpConversation(threadId);
+        }
+      }
 
       // Only load if conversation changed
       if (!changed) return;
@@ -4300,6 +4317,325 @@ class DOMExtractor {
     if (!content || !icon) return;
     const open = content.classList.toggle("open");
     icon.style.transform = open ? "rotate(90deg)" : "rotate(0deg)";
+  }
+
+  async toggleFollowUp() {
+    const content = document.getElementById("followUpContent");
+    const icon = document.getElementById("followUpToggleIcon");
+    if (!content || !icon) return;
+    const open = content.classList.toggle("open");
+    icon.style.transform = open ? "rotate(90deg)" : "rotate(0deg)";
+    
+    // Load conversations when panel opens
+    if (open) {
+      await this.loadFollowUpConversations();
+    }
+  }
+
+  async loadFollowUpConversations() {
+    const listContainer = document.getElementById("followUpList");
+    const statusMessage = document.getElementById("followUpStatusMessage");
+    if (!listContainer) return;
+
+    try {
+      statusMessage.textContent = "Loading conversations...";
+      listContainer.innerHTML = '<div class="status-details" style="color: #9aa7b2">Loading...</div>';
+
+      // Load conversations from both statuses
+      const [unknown, interested] = await Promise.all([
+        this.followUpService.getUnknownStatusConversations(),
+        this.followUpService.getInterestedStatusConversations(),
+      ]);
+
+      // Combine and store
+      this.followUpConversations = [
+        ...unknown.map(c => ({ ...c, _status: 'unknown' })),
+        ...interested.map(c => ({ ...c, _status: 'interested' })),
+      ];
+
+      // Update count badge
+      const countBadge = document.getElementById("followUpCount");
+      if (countBadge) {
+        countBadge.textContent = this.followUpConversations.length.toString();
+      }
+
+      // Render the list
+      this.renderFollowUpList();
+
+      statusMessage.textContent = `Found ${this.followUpConversations.length} conversation(s) from last week and earlier that need follow-up.`;
+    } catch (error) {
+      console.error("Error loading follow-up conversations:", error);
+      listContainer.innerHTML = '<div class="status-details" style="color: #ffb4b4">Error loading conversations. Check console.</div>';
+      statusMessage.textContent = "Error loading conversations.";
+    }
+  }
+
+  renderFollowUpList() {
+    const listContainer = document.getElementById("followUpList");
+    if (!listContainer) return;
+
+    if (!this.followUpConversations || this.followUpConversations.length === 0) {
+      listContainer.innerHTML = '<div class="status-details" style="color: #9aa7b2">No conversations need follow-up.</div>';
+      return;
+    }
+
+    let html = "";
+    for (const convo of this.followUpConversations) {
+      const threadId = convo.thread_id;
+      const title = convo.title || "Unknown Lead";
+      const status = convo._status || convo.status || "unknown";
+      const updatedAt = convo.updated_at ? new Date(convo.updated_at) : null;
+      const relativeTime = updatedAt ? this.getRelativeTime(updatedAt) : "Unknown";
+      
+      // Extract name for display
+      const displayName = convo.placeholders?.name || title.replace(/^Lead:\s*/i, "") || "Unknown";
+
+      // Status badge color
+      const statusColor = status === "interested" ? "rgba(34, 197, 94, 0.6)" : "rgba(156, 163, 175, 0.6)";
+      const statusBg = status === "interested" ? "rgba(34, 197, 94, 0.15)" : "rgba(156, 163, 175, 0.15)";
+
+      html += `
+        <div
+          class="status"
+          style="
+            margin-bottom: 10px;
+            padding: 12px;
+            background: ${statusBg};
+            border: 1px solid ${statusColor};
+          "
+          data-thread-id="${threadId}"
+        >
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              margin-bottom: 8px;
+            "
+          >
+            <div style="flex: 1; min-width: 0">
+              <div
+                class="status-text"
+                style="
+                  font-size: 14px;
+                  margin-bottom: 4px;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  white-space: nowrap;
+                "
+                title="${title}"
+              >
+                ${displayName}
+              </div>
+              <div
+                class="status-details"
+                style="
+                  font-size: 11px;
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                "
+              >
+                <span
+                  style="
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    background: ${statusBg};
+                    border: 1px solid ${statusColor};
+                    font-size: 10px;
+                    text-transform: capitalize;
+                  "
+                >
+                  ${status}
+                </span>
+                <span style="color: #9aa7b2">${relativeTime}</span>
+              </div>
+            </div>
+          </div>
+          <div
+            style="
+              display: flex;
+              gap: 6px;
+              margin-top: 8px;
+            "
+          >
+            <button
+              class="btn btn-ghost btn-small follow-up-open-btn"
+              data-thread-id="${threadId}"
+              data-url="${convo.url || `https://www.linkedin.com/messaging/thread/${threadId}`}"
+              style="
+                flex: 1;
+                font-size: 11px;
+                padding: 6px 10px;
+              "
+            >
+              Open
+            </button>
+            <button
+              class="btn btn-ghost btn-small follow-up-copy-btn"
+              data-thread-id="${threadId}"
+              data-status="${status}"
+              style="
+                flex: 1;
+                font-size: 11px;
+                padding: 6px 10px;
+              "
+            >
+              Copy Message
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    listContainer.innerHTML = html;
+
+    // Attach event listeners
+    listContainer.querySelectorAll(".follow-up-open-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        const threadId = e.target.dataset.threadId;
+        const url = e.target.dataset.url;
+        this.openFollowUpConversation(threadId, url);
+      });
+    });
+
+    listContainer.querySelectorAll(".follow-up-copy-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        const threadId = e.target.dataset.threadId;
+        const status = e.target.dataset.status;
+        this.copyFollowUpMessage(threadId, status);
+      });
+    });
+  }
+
+  async openFollowUpConversation(threadId, url) {
+    try {
+      // Navigate current tab to LinkedIn conversation
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (tab && tab.id) {
+        await chrome.tabs.update(tab.id, { url });
+        
+        // Remove conversation from list client-side
+        this.removeFollowUpConversation(threadId);
+        
+        this.addConsoleLog("FOLLOW-UP", "Opened conversation", {
+          threadId,
+        });
+      }
+    } catch (error) {
+      console.error("Error opening conversation:", error);
+      this.addConsoleLog("FOLLOW-UP", "Error opening conversation", {
+        error: error.message,
+        threadId,
+      });
+    }
+  }
+
+  async copyFollowUpMessage(threadId, status) {
+    try {
+      // Find the conversation in our list
+      const convo = this.followUpConversations.find(
+        (c) => c.thread_id === threadId
+      );
+
+      if (!convo) {
+        this.addConsoleLog("FOLLOW-UP", "Conversation not found", {
+          threadId,
+        });
+        return;
+      }
+
+      // Format the script
+      const formattedMessage = this.followUpService.formatScript(status, convo);
+
+      if (!formattedMessage) {
+        this.addConsoleLog("FOLLOW-UP", "Failed to format message", {
+          threadId,
+          status,
+        });
+        return;
+      }
+
+      // Copy to clipboard
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(formattedMessage);
+          this.addConsoleLog("FOLLOW-UP", "Message copied to clipboard", {
+            threadId,
+            length: formattedMessage.length,
+          });
+
+          // Show visual feedback
+          const btn = document.querySelector(
+            `.follow-up-copy-btn[data-thread-id="${threadId}"]`
+          );
+          if (btn) {
+            const originalText = btn.textContent;
+            btn.textContent = "✓ Copied";
+            btn.disabled = true;
+            setTimeout(() => {
+              btn.textContent = originalText;
+              btn.disabled = false;
+            }, 2000);
+          }
+        } else {
+          throw new Error("Clipboard API not available");
+        }
+      } catch (clipboardError) {
+        // Fallback: use the AI service's clipboard method
+        await this.aiService.injectResponse(formattedMessage);
+        this.addConsoleLog("FOLLOW-UP", "Message copied via fallback", {
+          threadId,
+        });
+      }
+    } catch (error) {
+      console.error("Error copying follow-up message:", error);
+      this.addConsoleLog("FOLLOW-UP", "Error copying message", {
+        error: error.message,
+        threadId,
+      });
+    }
+  }
+
+  removeFollowUpConversation(threadId) {
+    // Remove from stored list
+    this.followUpConversations = this.followUpConversations.filter(
+      (c) => c.thread_id !== threadId
+    );
+
+    // Update count badge
+    const countBadge = document.getElementById("followUpCount");
+    if (countBadge) {
+      countBadge.textContent = this.followUpConversations.length.toString();
+    }
+
+    // Re-render list
+    this.renderFollowUpList();
+  }
+
+  getRelativeTime(date) {
+    const now = new Date();
+    const diffMs = now - date;
+    const diffSecs = Math.floor(diffMs / 1000);
+    const diffMins = Math.floor(diffSecs / 60);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays > 7) {
+      return `${Math.floor(diffDays / 7)} week${Math.floor(diffDays / 7) > 1 ? "s" : ""} ago`;
+    } else if (diffDays > 0) {
+      return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
+    } else if (diffHours > 0) {
+      return `${diffHours} hour${diffHours > 1 ? "s" : ""} ago`;
+    } else if (diffMins > 0) {
+      return `${diffMins} minute${diffMins > 1 ? "s" : ""} ago`;
+    } else {
+      return "Just now";
+    }
   }
 
   async loadScripts() {

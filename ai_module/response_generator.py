@@ -67,12 +67,20 @@ def generate_response(conv: Conversation, analysis_result: Optional[Dict[str, An
     # Get recent messages for context (last 10 or all if fewer)
     recent_messages = conv.messages[-10:] if len(conv.messages) > 10 else conv.messages
     
-    # Check if last message is from us - if so, don't generate response
+    # Check if last non-deleted message is from us - if so, don't generate response
+    # Deleted messages have text "This message has been deleted." and should be disregarded
     if recent_messages:
-        last_msg = recent_messages[-1]
-        if last_msg.sender == "you":
+        # Find the last non-deleted message by iterating backwards
+        last_non_deleted_msg = None
+        for msg in reversed(recent_messages):
+            if msg.text.strip() != "This message has been deleted.":
+                last_non_deleted_msg = msg
+                break
+        
+        # If we found a non-deleted message and it's from us, don't generate response
+        if last_non_deleted_msg and last_non_deleted_msg.sender == "you":
             if Config.DEBUG:
-                print("[Generator] Last message is from us - no response needed")
+                print("[Generator] Last non-deleted message is from us - no response needed")
             return ""  # Return empty string, don't generate response
     
     # Get conversation state for guidance (minimal - only message counts)
@@ -188,9 +196,13 @@ def generate_response(conv: Conversation, analysis_result: Optional[Dict[str, An
     message_build_start = time.time()
     anthropic_messages = []
     
+    # Filter out deleted messages from conversation history
+    # Deleted messages have text "This message has been deleted." and should be disregarded
+    non_deleted_messages = [msg for msg in recent_messages if msg.text.strip() != "This message has been deleted."]
+    
     # 1. Add conversation history as alternating user/assistant messages
-    # Only include messages up to (but not including) the last one
-    conversation_history = recent_messages[:-1] if len(recent_messages) > 1 else []
+    # Only include messages up to (but not including) the last non-deleted one
+    conversation_history = non_deleted_messages[:-1] if len(non_deleted_messages) > 1 else []
     
     for msg in conversation_history:
         if msg.sender == "prospect":
@@ -200,9 +212,9 @@ def generate_response(conv: Conversation, analysis_result: Optional[Dict[str, An
         # Skip "other" sender type
     
     # 2. Add current prospect message (what we're responding to)
-    # Note: We already checked above that last message is from prospect, so this should always be true
-    if recent_messages:
-        last_msg = recent_messages[-1]
+    # Note: We already checked above that last non-deleted message is from prospect, so this should always be true
+    if non_deleted_messages:
+        last_msg = non_deleted_messages[-1]
         if last_msg.sender == "prospect":
             # Build guidance hint for the current message
             guidance_hint = ""
@@ -293,13 +305,25 @@ def generate_response(conv: Conversation, analysis_result: Optional[Dict[str, An
         
         response_text = resp.content[0].text.strip() if resp.content else ""
         
+        # DEBUG: Print raw Claude response
+        print("\n" + "="*80)
+        print("RAW CLAUDE RESPONSE:")
+        print("="*80)
+        print(response_text)
+        print("="*80 + "\n")
+        
         if response_text:
-            # Clean up response - remove emojis and markdown
+            # Clean up response - remove emojis and markdown BUT preserve newlines and spaces
             processing_start = time.time()
             import re
-            # Remove emojis
-            response_text = re.sub(r'[^\w\s\.,!?\-\(\)\':/=&_]', '', response_text)
-            response_text = response_text.strip().strip('"').strip("'")
+            # Remove emojis and special characters BUT preserve newlines (\n), spaces, and basic punctuation
+            original_response = response_text
+            # Remove emojis and non-printable characters, but preserve newlines (\n), spaces, and basic punctuation
+            # \w = word characters, \s = whitespace (includes \n), so we should keep newlines
+            # IMPORTANT: Include em dash (—), en dash (–), and regular hyphen (-) to preserve formatting
+            response_text = re.sub(r'[^\w\s\.,!?\-\(\)\':/=&_\n\r—–]', '', response_text)
+            # Only strip leading/trailing whitespace, not internal newlines
+            response_text = response_text.strip('"').strip("'").strip()
             processing_time = time.time() - processing_start
             if Config.DEBUG:
                 if processing_time < 0.001:

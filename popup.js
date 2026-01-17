@@ -9,6 +9,13 @@ class DOMExtractor {
     this.responseHistoryByThread = {};
     this.kbStatusEl = null;
     this.followUpConversations = []; // Store loaded follow-up conversations
+    this.selectedFollowUpThreadId = null; // Track selected profile for copy button
+    // Sequential message copying
+    this.sequentialMessages = []; // Array of split messages
+    this.currentMessageIndex = -1; // Current message being copied (-1 = none)
+    this.lastCopiedText = ""; // Track what we last copied
+    this.clipboardMonitorInterval = null; // Interval for monitoring clipboard
+    this.messageSendListener = null; // Listener for message send detection
     this.init();
   }
 
@@ -22,6 +29,18 @@ class DOMExtractor {
       () => this.loadConversationOnChange(),
       3000
     );
+
+    // Cleanup on page unload
+    window.addEventListener("beforeunload", () => {
+      this.stopAllMonitoring();
+    });
+
+    // Also cleanup on visibility change (popup closed)
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        this.stopAllMonitoring();
+      }
+    });
   }
 
   setupEventListeners() {
@@ -63,27 +82,8 @@ class DOMExtractor {
       saveKbBtn.addEventListener("click", () => this.saveKnowledgeEntry());
     }
 
-    const kbToggle = document.getElementById("kbToggle");
-    if (kbToggle) {
-      kbToggle.addEventListener("click", () => this.toggleKnowledgeBase());
-    }
-
-    const scriptsToggle = document.getElementById("scriptsToggle");
-    if (scriptsToggle) {
-      scriptsToggle.addEventListener("click", () => this.toggleScripts());
-    }
-
-    const placeholdersToggle = document.getElementById("placeholdersToggle");
-    if (placeholdersToggle) {
-      placeholdersToggle.addEventListener("click", () =>
-        this.togglePlaceholders()
-      );
-    }
-
-    const followUpToggle = document.getElementById("followUpToggle");
-    if (followUpToggle) {
-      followUpToggle.addEventListener("click", () => this.toggleFollowUp());
-    }
+    // Set up collapsible panels - make entire panel clickable when collapsed
+    this.setupCollapsiblePanels();
 
     this.kbStatusEl = document.getElementById("kbStatusMessage");
 
@@ -114,6 +114,11 @@ class DOMExtractor {
       copyResponseBtn.addEventListener("click", () =>
         this.copyResponseToClipboard()
       );
+
+      const nextMessageBtn = document.getElementById("nextMessageBtn");
+      if (nextMessageBtn) {
+        nextMessageBtn.addEventListener("click", () => this.copyNextMessage());
+      }
     }
 
     // Load scripts on init
@@ -126,10 +131,72 @@ class DOMExtractor {
   ensureScriptsPanelClosed() {
     const content = document.getElementById("scriptsContent");
     const icon = document.getElementById("scriptsToggleIcon");
+    const panel = document.getElementById("scriptsPanel");
     if (content && icon) {
       content.classList.remove("open");
       icon.style.transform = "rotate(0deg)";
     }
+    if (panel) {
+      panel.classList.add("collapsed");
+    }
+  }
+
+  setupCollapsiblePanels() {
+    // Initialize all panels as collapsed
+    const panels = [
+      { id: "scriptsPanel", toggle: () => this.toggleScripts() },
+      { id: "kbPanel", toggle: () => this.toggleKnowledgeBase() },
+      { id: "placeholdersPanel", toggle: () => this.togglePlaceholders() },
+      { id: "followUpPanel", toggle: () => this.toggleFollowUp() },
+    ];
+
+    panels.forEach(({ id, toggle }) => {
+      const panel = document.getElementById(id);
+      if (!panel) return;
+
+      // Add collapsed class initially (unless already set)
+      const content = panel.querySelector(".collapsible-content");
+      if (content && !content.classList.contains("open")) {
+        panel.classList.add("collapsed");
+      }
+
+      // Make entire panel clickable when collapsed
+      panel.addEventListener("click", (e) => {
+        // Don't trigger if clicking on interactive elements inside content
+        if (e.target.closest("button") && !e.target.closest(".collapsible")) {
+          return; // Don't interfere with buttons inside content
+        }
+        if (e.target.closest("input") || e.target.closest("textarea") || e.target.closest("select")) {
+          return; // Don't interfere with form elements
+        }
+
+        // Check if content is open
+        const isOpen = content && content.classList.contains("open");
+        
+        if (isOpen) {
+          // If expanded, only toggle if clicking the collapsible button
+          if (e.target.closest(".collapsible")) {
+            toggle();
+          }
+        } else {
+          // If collapsed, clicking anywhere on panel toggles it
+          toggle();
+        }
+      });
+
+      // Also keep the button clickable (for when expanded)
+      const button = panel.querySelector(".collapsible");
+      if (button) {
+        button.addEventListener("click", (e) => {
+          // Only stop propagation if we're actually toggling
+          // This allows the panel click handler to work when collapsed
+          if (content && content.classList.contains("open")) {
+            e.stopPropagation();
+          }
+          toggle();
+        });
+      }
+    });
   }
 
   async checkPageStatus() {
@@ -285,6 +352,27 @@ class DOMExtractor {
         knowledgeSnippets: aiResult.input?.knowledge_context?.length || 0,
       });
 
+      // DEBUG: Log the raw response from API BEFORE any processing
+      const rawResponse = aiResult.response;
+      this.addConsoleLog("DEBUG", "🔍 Raw API response received (manual)", {
+        responseType: typeof rawResponse,
+        responseLength: rawResponse ? rawResponse.length : 0,
+        first200Chars: rawResponse ? rawResponse.substring(0, 200) : "N/A",
+        hasComma: rawResponse ? rawResponse.includes(",") : false,
+        hasPeriod: rawResponse ? rawResponse.includes(".") : false,
+        charCodes: rawResponse
+          ? Array.from(rawResponse.substring(0, 100))
+              .map((c) => {
+                const code = c.charCodeAt(0);
+                if (code === 44) return `COMMA@${rawResponse.indexOf(c)}`;
+                if (code === 46) return `PERIOD@${rawResponse.indexOf(c)}`;
+                return null;
+              })
+              .filter((x) => x)
+              .slice(0, 10)
+          : [],
+      });
+
       // Show suggested response in the top bar and add to history
       this.setStatus("Suggested", aiResult.response);
       this.addToHistory(threadId, aiResult.response);
@@ -310,27 +398,60 @@ class DOMExtractor {
         }
       }
 
-      // Copy to clipboard (silently handle errors - don't show in status)
-      this.addConsoleLog("UI", "Copying response to clipboard", { threadId });
+      // Copy full response to clipboard - ALWAYS copy the entire response when generated
+      this.addConsoleLog("UI", "Auto-copying full response to clipboard", { 
+        threadId,
+        responseLength: aiResult.response?.length || 0,
+      });
       try {
-        await this.aiService.injectResponse(aiResult.response, tab.id);
-        this.addConsoleLog("AI", "Generated from cloud - copied to clipboard", {
-          threadId,
-          phase: aiResult.phase,
-        });
+        // Copy the entire response (not individual messages) - this happens automatically on generation
+        if (aiResult.response && tab && tab.id) {
+          const copyResult = await this.aiService.injectResponse(aiResult.response, tab.id);
+          if (copyResult && copyResult.success) {
+            this.addConsoleLog("AI", "✅ Full response auto-copied to clipboard", {
+              threadId,
+              phase: aiResult.phase,
+              messageCount: this.sequentialMessages?.length || 1,
+              method: copyResult.method,
+            });
+          } else {
+            throw new Error("injectResponse did not return success");
+          }
+        } else if (aiResult.response) {
+          // Fallback if tab not available - try direct clipboard
+          await this.copyTextToClipboard(aiResult.response);
+          this.addConsoleLog("AI", "✅ Full response auto-copied (fallback method)", {
+            threadId,
+            phase: aiResult.phase,
+          });
+        }
+
+        // Reset to no message selected (user will click on boxes to copy individual messages)
+        this.currentMessageIndex = -1;
+        this.lastCopiedText = "";
       } catch (clipboardError) {
-        // Log clipboard error to console only, don't affect status
-        this.addConsoleLog("ERROR", "Failed to copy to clipboard", {
+        // Log error but don't fail the whole operation
+        this.addConsoleLog("ERROR", "Failed to auto-copy response to clipboard", {
           error: clipboardError.message,
-          response: aiResult?.response
-            ? aiResult.response.substring(0, 50) + "..."
-            : "No response",
+          responseLength: aiResult?.response?.length || 0,
+          hasTab: !!tab,
+          tabId: tab?.id,
         });
-        console.error("Clipboard copy failed:", clipboardError);
+        // Try one more fallback
+        try {
+          if (aiResult.response) {
+            await this.copyTextToClipboard(aiResult.response);
+            this.addConsoleLog("UI", "✅ Response copied using final fallback", {});
+          }
+        } catch (finalError) {
+          this.addConsoleLog("ERROR", "All copy methods failed", {
+            error: finalError.message,
+          });
+        }
       }
       return aiResult;
     } catch (e) {
-      console.error("GenerateFromCloud failed:", e);
+      // Error logged to UI console only
       // Only show errors in status if it's NOT a clipboard error
       if (!e.message || !e.message.includes("clipboard")) {
         this.setStatus("Error", e.message || "Failed generating from cloud");
@@ -348,57 +469,861 @@ class DOMExtractor {
   }
 
   setStatus(text, details) {
+    // DEBUG: Log EVERY call to setStatus IMMEDIATELY
+    this.addConsoleLog("DEBUG", `🔍 setStatus called`, {
+      text: text,
+      hasDetails: !!details,
+      detailsType: typeof details,
+      detailsLength: details ? details.length : 0,
+      detailsPreview: details ? details.substring(0, 100) + "..." : "N/A",
+    });
+
     document.getElementById("statusText").textContent = text;
     const statusDetailsEl = document.getElementById("statusDetails");
-    statusDetailsEl.textContent = details;
 
     // Show/hide copy button based on status
     const copyBtn = document.getElementById("copyResponseBtn");
-    if (copyBtn) {
-      if (text === "Suggested" && details) {
-        copyBtn.style.display = "block";
+
+    // ALWAYS split messages if we have a "Suggested" status, regardless of copyBtn
+    if (text === "Suggested" && details) {
+      // DEBUG: Log the raw response to see what we're getting
+      const hasNewlines = details.includes("\n");
+      const newlineCount = (details.match(/\n/g) || []).length;
+      const doubleNewlineCount = (details.match(/\n\s*\n/g) || []).length;
+      const hasCarriageReturn = details.includes("\r");
+      const hasTabs = details.includes("\t");
+
+      // Show first 300 chars with visible newlines
+      const visibleText = details
+        .substring(0, 300)
+        .replace(/\n/g, "\\n")
+        .replace(/\r/g, "\\r")
+        .replace(/\t/g, "\\t");
+
+      this.addConsoleLog("DEBUG", "🔍 Raw response received for splitting", {
+        responseLength: details.length,
+        hasNewlines: hasNewlines,
+        newlineCount: newlineCount,
+        doubleNewlineCount: doubleNewlineCount,
+        hasCarriageReturn: hasCarriageReturn,
+        hasTabs: hasTabs,
+        first300CharsVisible: visibleText,
+        charCodes: Array.from(details.substring(0, 200))
+          .map((c, i) => {
+            const code = c.charCodeAt(0);
+            if (code === 10) return `\\n@${i}`;
+            if (code === 13) return `\\r@${i}`;
+            if (code === 9) return `\\t@${i}`;
+            return null;
+          })
+          .filter((x) => x),
+      });
+
+      // Split response into separate messages by newlines
+      this.sequentialMessages = this.splitIntoMessages(details);
+
+      // DEBUG: Log what splitIntoMessages returned
+      this.addConsoleLog("DEBUG", "🔍 splitIntoMessages returned", {
+        messageCount: this.sequentialMessages.length,
+        messages: this.sequentialMessages.map((m, i) => ({
+          index: i + 1,
+          length: m.length,
+          preview: m.substring(0, 80),
+        })),
+      });
+      this.currentMessageIndex = -1; // Reset to start
+      this.lastCopiedText = ""; // Reset
+
+      // Log splitting result to UI console with detailed debug info
+      if (this.sequentialMessages.length > 1) {
+        this.addConsoleLog(
+          "UI",
+          `✅ Split response into ${this.sequentialMessages.length} separate messages`,
+          {
+            messageCount: this.sequentialMessages.length,
+            messages: this.sequentialMessages.map((m, i) => ({
+              index: i + 1,
+              preview: m.substring(0, 60) + "...",
+              length: m.length,
+            })),
+          }
+        );
+      } else {
+        // Debug: Show why splitting failed
+        this.addConsoleLog(
+          "UI",
+          `⚠️ Response kept as single message (could not split)`,
+          {
+            responseLength: details.length,
+            preview: details.substring(0, 60) + "...",
+            hasNewlines: hasNewlines,
+            newlineCount: newlineCount,
+            doubleNewlineCount: doubleNewlineCount,
+            first100Chars: details.substring(0, 100).replace(/\n/g, "\\n"),
+            splitResultLength: this.sequentialMessages.length,
+            splitResult: this.sequentialMessages.map((m, i) => ({
+              index: i + 1,
+              length: m.length,
+              preview: m.substring(0, 50),
+            })),
+          }
+        );
+      }
+
+      // Display messages separately with visual indicators
+      this.displaySequentialMessages(details);
+
+      // Handle copy button if it exists
+      if (copyBtn) {
         // Store the response text for copying
         copyBtn.dataset.responseText = details;
-      } else {
-        copyBtn.style.display = "none";
-        copyBtn.dataset.responseText = "";
+        copyBtn.style.display = "block";
+
+        // Update copy button text if multiple messages
+        if (this.sequentialMessages.length > 1) {
+          copyBtn.textContent = `📋 Copy 1/${this.sequentialMessages.length}`;
+        } else {
+          copyBtn.textContent = "📋 Copy";
+        }
+      }
+
+      // Show/hide next button for skipping to next message
+      const nextBtn = document.getElementById("nextMessageBtn");
+      if (nextBtn) {
+        if (this.sequentialMessages.length > 1) {
+          // Show button if there are multiple messages
+          // Allow skipping even before copying first message
+          nextBtn.style.display = "block";
+          const nextIndex =
+            this.currentMessageIndex < 0 ? 0 : this.currentMessageIndex + 1;
+          if (nextIndex < this.sequentialMessages.length) {
+            nextBtn.textContent = `⏭️ Skip to ${nextIndex + 1}/${
+              this.sequentialMessages.length
+            }`;
+          } else {
+            nextBtn.style.display = "none";
+          }
+        } else {
+          nextBtn.style.display = "none";
+        }
+      }
+    } else if (copyBtn) {
+      // Reset to simple text display
+      statusDetailsEl.textContent = details;
+      // Restore padding for text display (needed for copy button positioning)
+      statusDetailsEl.style.paddingRight = "70px";
+      copyBtn.style.display = "none";
+      copyBtn.dataset.responseText = "";
+      // Stop all monitoring when status changes
+      this.stopAllMonitoring();
+      this.sequentialMessages = [];
+      this.currentMessageIndex = -1;
+      this.lastCopiedText = "";
+
+      // Hide next button
+      const nextBtn = document.getElementById("nextMessageBtn");
+      if (nextBtn) nextBtn.style.display = "none";
+
+      // Remove message containers
+      this.clearMessageDisplay();
+    } else {
+      statusDetailsEl.textContent = details;
+      // Restore padding for text display
+      statusDetailsEl.style.paddingRight = "70px";
+    }
+  }
+
+  /**
+   * Split response text into separate messages.
+   * Split on single newlines - each newline indicates a new message.
+   * This allows sending multiple individual messages instead of one long message.
+   */
+  splitIntoMessages(text) {
+    if (!text || !text.trim()) {
+      return [];
+    }
+
+    // Normalize line endings - ensure we have \n characters
+    let normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+    // DEBUG: Log the normalized text to verify newlines are present
+    const newlinePositions = [];
+    for (let i = 0; i < normalized.length; i++) {
+      if (normalized.charCodeAt(i) === 10) {
+        newlinePositions.push(i);
       }
     }
+
+    this.addConsoleLog("DEBUG", "🔍 splitIntoMessages input analysis", {
+      originalLength: text.length,
+      normalizedLength: normalized.length,
+      newlineCount: newlinePositions.length,
+      newlinePositions: newlinePositions.slice(0, 10), // First 10 positions
+    });
+
+    // Split on newlines (single or multiple) - each newline indicates a new message
+    // Split on any sequence of newlines (handles both \n and \n\n, etc.)
+    const parts = normalized
+      .split(/\n+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+
+    // If we got multiple parts, return them
+    // If only one (or zero), return the whole thing as a single message
+    if (parts.length > 1) {
+      this.addConsoleLog("DEBUG", `✅ Split into ${parts.length} messages`, {
+        messageCount: parts.length,
+        messages: parts.map((p, i) => ({
+          index: i + 1,
+          length: p.length,
+          preview: p.substring(0, 60),
+        })),
+      });
+      return parts;
+    }
+
+    // Single message - return as array with one element
+    this.addConsoleLog(
+      "DEBUG",
+      "⚠️ splitIntoMessages: Only one part after split",
+      {
+        partsAfterSplit: normalized.split(/\n+/).length,
+        partsAfterTrim: parts.length,
+        normalizedPreview: normalized.substring(0, 200).replace(/\n/g, "\\n"),
+      }
+    );
+    return [normalized.trim()].filter((m) => m.length > 0);
+  }
+
+  /**
+   * Display messages as separate visual cards with status indicators
+   */
+  displaySequentialMessages(fullText) {
+    const statusDetailsEl = document.getElementById("statusDetails");
+    if (!statusDetailsEl) return;
+
+    // Clear existing content (both text and containers)
+    statusDetailsEl.textContent = "";
+    this.clearMessageDisplay();
+    
+    // Ensure statusDetails has full width styling for message cards
+    // Remove right padding when displaying cards to allow full width
+    statusDetailsEl.style.width = "100%";
+    statusDetailsEl.style.maxWidth = "100%";
+    statusDetailsEl.style.boxSizing = "border-box";
+    statusDetailsEl.style.paddingRight = "0";
+
+    // DEBUG: Log what we're displaying
+    this.addConsoleLog("DEBUG", "🔍 displaySequentialMessages called", {
+      sequentialMessagesCount: this.sequentialMessages
+        ? this.sequentialMessages.length
+        : 0,
+      hasSequentialMessages: !!this.sequentialMessages,
+      fullTextLength: fullText ? fullText.length : 0,
+    });
+
+    // ALWAYS display messages as cards, even if only one
+    // This ensures visual consistency and makes it clear what will be copied
+    if (this.sequentialMessages && this.sequentialMessages.length > 0) {
+      // Create container for messages
+      const messagesContainer = document.createElement("div");
+      messagesContainer.id = "sequentialMessagesContainer";
+      messagesContainer.style.cssText = `
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        margin-top: 4px;
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+        margin-left: 0;
+        margin-right: 0;
+        padding: 0;
+      `;
+
+      // Create a card for each message
+      this.sequentialMessages.forEach((message, index) => {
+        const messageCard = document.createElement("div");
+        messageCard.id = `messageCard-${index}`;
+        messageCard.dataset.messageIndex = index;
+
+        const isActive = this.currentMessageIndex === index;
+        const isPastCopied = this.currentMessageIndex > index;
+
+        // Determine status and colors
+        // Note: Removed "isNext" logic - all messages start as "click to copy" until clicked
+        let statusText = "";
+        let statusColor = "#9aa7b2";
+        let borderColor = "#26344a";
+        let backgroundColor = "#0f1624";
+        let borderWidth = "2px";
+
+        if (isActive) {
+          // Currently copied - ready to paste
+          statusText = "📋 COPIED - Ready to paste";
+          statusColor = "#3b82f6";
+          borderColor = "#3b82f6";
+          backgroundColor = "rgba(59, 130, 246, 0.15)";
+          borderWidth = "2px";
+        } else if (isPastCopied) {
+          // Already pasted
+          statusText = "✓ PASTED";
+          statusColor = "#22c55e";
+          borderColor = "#22c55e";
+          backgroundColor = "rgba(34, 197, 94, 0.1)";
+          borderWidth = "2px";
+        } else {
+          // Not copied yet - click to copy (default state for all messages)
+          statusText = "👆 Click to copy";
+          statusColor = "#9aa7b2";
+          borderColor = "#26344a";
+          backgroundColor = "#0f1624";
+          borderWidth = "1px";
+        }
+
+        // Card container - full width and text selectable
+        messageCard.style.cssText = `
+          padding: 8px 10px 8px 10px;
+          border-radius: 8px;
+          border: ${borderWidth} solid ${borderColor};
+          background: ${backgroundColor};
+          position: relative;
+          transition: all 0.3s ease;
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+          box-sizing: border-box;
+          margin: 0;
+          user-select: text;
+          -webkit-user-select: text;
+          -moz-user-select: text;
+          -ms-user-select: text;
+        `;
+
+        // Message number badge - positioned absolutely in top-right corner, very subtle overlay
+        const numberBadge = document.createElement("div");
+        numberBadge.style.cssText = `
+          position: absolute;
+          top: 4px;
+          right: 6px;
+          background: rgba(11, 15, 20, 0.85);
+          color: rgba(154, 162, 178, 0.5);
+          font-size: 9px;
+          font-weight: 400;
+          padding: 1px 4px;
+          border-radius: 4px;
+          pointer-events: none;
+          z-index: 1;
+          line-height: 1.2;
+        `;
+        numberBadge.textContent = `${index + 1}/${
+          this.sequentialMessages.length
+        }`;
+
+        // Message text - fully selectable for easy copy/paste, starts at top, full width
+        const messageText = document.createElement("div");
+        messageText.style.cssText = `
+          color: #e6edf3;
+          font-size: 13px;
+          line-height: 1.6;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+          margin: 0;
+          padding: 0;
+          width: 100%;
+          user-select: text;
+          -webkit-user-select: text;
+          -moz-user-select: text;
+          -ms-user-select: text;
+          cursor: text;
+        `;
+        messageText.textContent = message;
+        
+        // Handle click - but allow text selection to work
+        let clickStartTime = 0;
+        let clickStartX = 0;
+        let clickStartY = 0;
+        
+        messageCard.addEventListener("mousedown", (e) => {
+          clickStartTime = Date.now();
+          clickStartX = e.clientX;
+          clickStartY = e.clientY;
+        });
+        
+        messageCard.addEventListener("mouseup", async (e) => {
+          const clickDuration = Date.now() - clickStartTime;
+          const moveDistance = Math.sqrt(
+            Math.pow(e.clientX - clickStartX, 2) + Math.pow(e.clientY - clickStartY, 2)
+          );
+          
+          // Only trigger copy if it was a quick click without much movement (not a text selection)
+          if (clickDuration < 200 && moveDistance < 5) {
+            // Check if user selected text - if so, don't copy
+            const selection = window.getSelection();
+            if (selection && selection.toString().length > 0) {
+              // User is selecting text, don't interfere
+              return;
+            }
+            
+            // Quick click without text selection - copy the message
+            await this.copyMessageByIndex(index);
+          }
+        });
+
+        // Add hover effect
+        messageCard.addEventListener("mouseenter", () => {
+          if (!isActive) {
+            messageCard.style.borderColor = "#4a5568";
+            messageCard.style.background = "#1a2332";
+          }
+        });
+        messageCard.addEventListener("mouseleave", () => {
+          if (!isActive) {
+            messageCard.style.borderColor = borderColor;
+            messageCard.style.background = backgroundColor;
+          }
+        });
+
+        messageCard.appendChild(numberBadge);
+        messageCard.appendChild(messageText);
+        messagesContainer.appendChild(messageCard);
+      });
+
+      statusDetailsEl.appendChild(messagesContainer);
+
+      // Update the response counter
+      this.updateResponseCounter();
+    } else {
+      // If no messages were split, create a single card for the full text
+      // This ensures consistent visual display
+      const messagesContainer = document.createElement("div");
+      messagesContainer.id = "sequentialMessagesContainer";
+      messagesContainer.style.cssText = `
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 2px;
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+        margin-left: 0;
+        margin-right: 0;
+        padding: 0;
+      `;
+
+      const messageCard = document.createElement("div");
+      messageCard.id = "messageCard-0";
+      messageCard.dataset.messageIndex = 0;
+      messageCard.style.cssText = `
+        padding: 8px 10px 8px 10px;
+        border-radius: 8px;
+        border: 1px solid #26344a;
+        background: #0f1624;
+        position: relative;
+        transition: all 0.3s ease;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        margin: 0;
+        user-select: text;
+        -webkit-user-select: text;
+        -moz-user-select: text;
+        -ms-user-select: text;
+      `;
+
+      // Message number badge - positioned absolutely in top-right corner, very subtle overlay
+      const numberBadge = document.createElement("div");
+      numberBadge.style.cssText = `
+        position: absolute;
+        top: 4px;
+        right: 6px;
+        background: rgba(11, 15, 20, 0.85);
+        color: rgba(154, 162, 178, 0.5);
+        font-size: 9px;
+        font-weight: 400;
+        padding: 1px 4px;
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 1;
+        line-height: 1.2;
+      `;
+      numberBadge.textContent = "1/1";
+
+      // Message text - fully selectable for easy copy/paste, starts at top, full width
+      const messageText = document.createElement("div");
+      messageText.style.cssText = `
+        color: #e6edf3;
+        font-size: 13px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        user-select: text;
+        -webkit-user-select: text;
+        -moz-user-select: text;
+        -ms-user-select: text;
+        cursor: text;
+      `;
+      messageText.textContent = fullText;
+
+      messageCard.appendChild(numberBadge);
+      messageCard.appendChild(messageText);
+      messagesContainer.appendChild(messageCard);
+      statusDetailsEl.appendChild(messagesContainer);
+    }
+  }
+
+  /**
+   * Clear the message display
+   */
+  clearMessageDisplay() {
+    const container = document.getElementById("sequentialMessagesContainer");
+    if (container) container.remove();
+  }
+
+  /**
+   * Update response counter in header
+   */
+  updateResponseCounter() {
+    const respCounter = document.getElementById("respCounter");
+    if (respCounter && this.sequentialMessages.length > 0) {
+      const current =
+        this.currentMessageIndex >= 0 ? this.currentMessageIndex + 1 : 0;
+      const total = this.sequentialMessages.length;
+      respCounter.textContent = `${current}/${total}`;
+    }
+  }
+
+  /**
+   * Copy a specific message by index (called when user clicks on a message card)
+   */
+  async copyMessageByIndex(index) {
+    if (
+      !this.sequentialMessages ||
+      index < 0 ||
+      index >= this.sequentialMessages.length
+    ) {
+      this.addConsoleLog("ERROR", "Invalid message index", {
+        index,
+        totalMessages: this.sequentialMessages?.length || 0,
+      });
+      return;
+    }
+
+    const messageToCopy = this.sequentialMessages[index];
+    this.currentMessageIndex = index;
+    this.lastCopiedText = messageToCopy;
+
+    this.addConsoleLog(
+      "UI",
+      `Copying message ${index + 1}/${this.sequentialMessages.length}`,
+      {
+        messageIndex: index + 1,
+        totalMessages: this.sequentialMessages.length,
+        messageLength: messageToCopy.length,
+        preview: messageToCopy.substring(0, 50) + "...",
+      }
+    );
+
+    // Copy to clipboard using content script (works reliably)
+    try {
+      // Get active tab to use content script method
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (tab && tab.id) {
+        // Use injectResponse which uses content script (more reliable)
+        const result = await this.aiService.injectResponse(messageToCopy, tab.id);
+        if (result && result.success) {
+          this.addConsoleLog("UI", "Message copied to clipboard", {
+            messageIndex: index + 1,
+            length: messageToCopy.length,
+            method: result.method,
+          });
+        } else {
+          throw new Error("injectResponse returned no success");
+        }
+      } else {
+        // Fallback to direct clipboard API
+        this.addConsoleLog("UI", "No active tab found, using direct clipboard", {});
+        await this.copyTextToClipboard(messageToCopy);
+      }
+
+      // Refresh display to show which message is active
+      this.updateSequentialIndicator();
+    } catch (error) {
+      this.addConsoleLog("ERROR", "Failed to copy message", {
+        error: error.message,
+        messageIndex: index + 1,
+      });
+      // Try fallback method
+      try {
+        await this.copyTextToClipboard(messageToCopy);
+        this.addConsoleLog("UI", "Message copied using fallback method", {});
+        this.updateSequentialIndicator();
+      } catch (fallbackError) {
+        this.addConsoleLog("ERROR", "Fallback copy also failed", {
+          error: fallbackError.message,
+        });
+      }
+    }
+  }
+
+  /**
+   * Update visual display of messages (refresh the cards)
+   */
+  updateSequentialIndicator() {
+    const copyBtn = document.getElementById("copyResponseBtn");
+    const nextBtn = document.getElementById("nextMessageBtn");
+
+    if (!copyBtn) return;
+
+    if (this.sequentialMessages.length > 1) {
+      // Show/hide next button - allow skipping even before first copy
+      if (nextBtn) {
+        const nextIndex =
+          this.currentMessageIndex < 0 ? 0 : this.currentMessageIndex + 1;
+        if (nextIndex < this.sequentialMessages.length) {
+          nextBtn.style.display = "block";
+          nextBtn.textContent = `⏭️ Skip to ${nextIndex + 1}/${
+            this.sequentialMessages.length
+          }`;
+        } else {
+          nextBtn.style.display = "none";
+        }
+      }
+
+      // Re-render the message display to update statuses
+      const statusDetailsEl = document.getElementById("statusDetails");
+      const container = document.getElementById("sequentialMessagesContainer");
+
+      if (statusDetailsEl && container) {
+        // Update existing cards
+        this.sequentialMessages.forEach((message, index) => {
+          const card = document.getElementById(`messageCard-${index}`);
+          if (!card) return;
+
+          const isActive = this.currentMessageIndex === index;
+          const isPastCopied = this.currentMessageIndex > index;
+
+          let statusColor = "#9aa7b2";
+          let statusText = "";
+          let borderColor = "#26344a";
+          let backgroundColor = "#0f1624";
+          let borderWidth = "2px";
+
+          if (isActive) {
+            statusText = "📋 COPIED - Ready to paste";
+            statusColor = "#3b82f6";
+            borderColor = "#3b82f6";
+            backgroundColor = "rgba(59, 130, 246, 0.15)";
+            borderWidth = "2px";
+          } else if (isPastCopied) {
+            statusText = "✓ PASTED";
+            statusColor = "#22c55e";
+            borderColor = "#22c55e";
+            backgroundColor = "rgba(34, 197, 94, 0.1)";
+            borderWidth = "2px";
+          } else {
+            // Default state - click to copy (no purple "next" state)
+            statusText = "👆 Click to copy";
+            statusColor = "#9aa7b2";
+            borderColor = "#26344a";
+            backgroundColor = "#0f1624";
+            borderWidth = "1px";
+          }
+
+          // Update card styling
+          card.style.borderColor = borderColor;
+          card.style.borderWidth = borderWidth;
+          card.style.background = backgroundColor;
+
+          // Update header row (first child) - contains status and badge
+          const headerRow = card.children[0];
+          if (headerRow) {
+            // Status indicator is first child of header
+            const statusEl = headerRow.children[0];
+            if (statusEl) {
+              statusEl.textContent = statusText;
+              statusEl.style.color = statusColor;
+            }
+
+            // Badge is second child of header
+            const badge = headerRow.children[1];
+            if (badge) {
+              badge.style.background = statusColor;
+            }
+          }
+        });
+      }
+
+      this.updateResponseCounter();
+    } else {
+      if (nextBtn) nextBtn.style.display = "none";
+    }
+  }
+
+  /**
+   * Copy the next message in sequence (manual trigger - skip to next)
+   */
+  async copyNextMessage() {
+    if (!this.sequentialMessages || this.sequentialMessages.length <= 1) return;
+
+    // Calculate next index
+    const nextIndex =
+      this.currentMessageIndex < 0 ? 0 : this.currentMessageIndex + 1;
+
+    // Check if we can move to next
+    if (nextIndex >= this.sequentialMessages.length) {
+      this.addConsoleLog("UI", "Already at last message, cannot skip");
+      return;
+    }
+
+    // Move to next message
+    this.currentMessageIndex = nextIndex;
+    const messageToCopy = this.sequentialMessages[this.currentMessageIndex];
+
+    this.addConsoleLog(
+      "UI",
+      `⏭️ Skipping to message ${this.currentMessageIndex + 1}/${
+        this.sequentialMessages.length
+      }`,
+      {
+        messageIndex: this.currentMessageIndex + 1,
+        totalMessages: this.sequentialMessages.length,
+        messagePreview: messageToCopy.substring(0, 60) + "...",
+      }
+    );
+
+    await this.copyTextToClipboard(messageToCopy);
+    this.lastCopiedText = messageToCopy;
+
+    // Start monitoring for next message send
+    if (this.currentMessageIndex < this.sequentialMessages.length - 1) {
+      const currentMessage = this.sequentialMessages[this.currentMessageIndex];
+      this.startMessageSendMonitoring(currentMessage);
+    } else {
+      this.stopMessageSendMonitoring();
+      this.stopClipboardMonitoring();
+    }
+
+    // Refresh the display
+    this.updateSequentialIndicator();
   }
 
   async copyResponseToClipboard() {
     const copyBtn = document.getElementById("copyResponseBtn");
     if (!copyBtn) return;
 
-    const responseText = copyBtn.dataset.responseText;
-    if (!responseText) {
-      this.addConsoleLog("ERROR", "No response text to copy", {});
+    // ALWAYS try to use sequential messages if they exist, even if length is 1
+    // This ensures we're using the split messages, not the full text
+    if (this.sequentialMessages && this.sequentialMessages.length > 0) {
+      // Start with first message if not started, otherwise stay on current
+      if (this.currentMessageIndex < 0) {
+        this.currentMessageIndex = 0;
+      }
+
+      const messageToCopy = this.sequentialMessages[this.currentMessageIndex];
+
+      // Log to UI console
+      this.addConsoleLog(
+        "UI",
+        `Copying message ${this.currentMessageIndex + 1}/${
+          this.sequentialMessages.length
+        }`,
+        {
+          messageIndex: this.currentMessageIndex + 1,
+          totalMessages: this.sequentialMessages.length,
+          messageLength: messageToCopy.length,
+          preview: messageToCopy.substring(0, 50) + "...",
+        }
+      );
+
+      await this.copyTextToClipboard(messageToCopy);
+      this.lastCopiedText = messageToCopy;
+
+      // Start monitoring for message send if there are more messages
+      if (
+        this.sequentialMessages.length > 1 &&
+        this.currentMessageIndex < this.sequentialMessages.length - 1
+      ) {
+        this.startMessageSendMonitoring(messageToCopy);
+      } else {
+        this.stopMessageSendMonitoring();
+        this.stopClipboardMonitoring();
+      }
+
+      // Refresh display to show updated status
+      this.updateSequentialIndicator();
       return;
     }
 
+    // Fallback: copy full response text (only if no sequential messages at all)
+    const responseText = copyBtn.dataset.responseText;
+    if (responseText) {
+      // Warning logged to UI console only
+      this.addConsoleLog(
+        "WARNING",
+        "Copying full response (sequentialMessages is empty)",
+        {
+          note: "This should not happen if splitting worked correctly",
+        }
+      );
+      await this.copyTextToClipboard(responseText);
+      this.lastCopiedText = responseText;
+    } else {
+      this.addConsoleLog("ERROR", "No response text to copy", {});
+    }
+  }
+
+  /**
+   * Copy text to clipboard with visual feedback
+   */
+  async copyTextToClipboard(text) {
+    const copyBtn = document.getElementById("copyResponseBtn");
+    
     try {
       // Try modern clipboard API first
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(responseText);
-        this.addConsoleLog("UI", "Response copied to clipboard", {
-          length: responseText.length,
+        await navigator.clipboard.writeText(text);
+        this.addConsoleLog("UI", "Message copied to clipboard", {
+          length: text.length,
         });
 
         // Show visual feedback
         const originalText = copyBtn.textContent;
-        copyBtn.textContent = "✓ Copied";
+        if (this.sequentialMessages && this.sequentialMessages.length > 1) {
+          copyBtn.textContent = `✓ Copied ${this.currentMessageIndex + 1}/${
+            this.sequentialMessages.length
+          }`;
+        } else {
+          copyBtn.textContent = "✓ Copied";
+        }
         copyBtn.style.background = "rgba(34, 197, 94, 0.2)";
         copyBtn.style.borderColor = "#22c55e";
 
         setTimeout(() => {
-          copyBtn.textContent = originalText;
+          if (this.sequentialMessages && this.sequentialMessages.length > 1) {
+            copyBtn.textContent = `📋 Copy ${this.currentMessageIndex + 1}/${
+              this.sequentialMessages.length
+            }`;
+          } else {
+            copyBtn.textContent = originalText;
+          }
           copyBtn.style.background = "";
           copyBtn.style.borderColor = "";
         }, 2000);
       } else {
         // Fallback: create temporary textarea
         const textarea = document.createElement("textarea");
-        textarea.value = responseText;
+        textarea.value = text;
         textarea.style.position = "fixed";
         textarea.style.left = "-999999px";
         document.body.appendChild(textarea);
@@ -406,19 +1331,31 @@ class DOMExtractor {
         document.execCommand("copy");
         document.body.removeChild(textarea);
 
-        this.addConsoleLog("UI", "Response copied to clipboard (fallback)", {
-          length: responseText.length,
+        this.addConsoleLog("UI", "Message copied to clipboard (fallback)", {
+          length: text.length,
         });
 
         // Show visual feedback
         const originalText = copyBtn.textContent;
-        copyBtn.textContent = "✓ Copied";
+        if (this.sequentialMessages && this.sequentialMessages.length > 1) {
+          copyBtn.textContent = `✓ Copied ${this.currentMessageIndex + 1}/${
+            this.sequentialMessages.length
+          }`;
+        } else {
+          copyBtn.textContent = "✓ Copied";
+        }
         setTimeout(() => {
-          copyBtn.textContent = originalText;
+          if (this.sequentialMessages && this.sequentialMessages.length > 1) {
+            copyBtn.textContent = `📋 Copy ${this.currentMessageIndex + 1}/${
+              this.sequentialMessages.length
+            }`;
+          } else {
+            copyBtn.textContent = originalText;
+          }
         }, 2000);
       }
     } catch (error) {
-      console.error("Failed to copy to clipboard:", error);
+      // Error logged to UI console only
       this.addConsoleLog("ERROR", "Failed to copy to clipboard", {
         error: error.message,
       });
@@ -430,6 +1367,228 @@ class DOMExtractor {
         copyBtn.textContent = originalText;
       }, 2000);
     }
+  }
+
+  /**
+   * Start monitoring for when the current message is sent (via DOM observation)
+   */
+  startMessageSendMonitoring(messageText) {
+    // Get active tab
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        // Start monitoring in content script
+        chrome.tabs
+          .sendMessage(tabs[0].id, {
+            action: "startMessageMonitoring",
+            expectedMessageText: messageText,
+          })
+          .catch(() => {
+            // Content script might not be loaded - that's ok
+          });
+      }
+    });
+
+    // Also listen for messages from content script
+    if (!this.messageSendListener) {
+      this.messageSendListener = (message) => {
+        if (message.action === "messageSent") {
+          // Message was sent! Advance to next
+          this.handleMessageSent();
+        }
+      };
+      chrome.runtime.onMessage.addListener(this.messageSendListener);
+    }
+  }
+
+  /**
+   * Stop monitoring for message sends
+   */
+  stopMessageSendMonitoring() {
+    // Remove listener
+    if (this.messageSendListener) {
+      chrome.runtime.onMessage.removeListener(this.messageSendListener);
+      this.messageSendListener = null;
+    }
+
+    // Stop monitoring in content script
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs
+          .sendMessage(tabs[0].id, {
+            action: "stopMessageMonitoring",
+          })
+          .catch(() => {
+            // Ignore errors
+          });
+      }
+    });
+  }
+
+  /**
+   * Handle when a message is sent - advance to next message
+   */
+  async handleMessageSent() {
+    // Check if we have more messages
+    if (
+      !this.sequentialMessages ||
+      this.sequentialMessages.length <= 1 ||
+      this.currentMessageIndex < 0 ||
+      this.currentMessageIndex >= this.sequentialMessages.length - 1
+    ) {
+      // No more messages - stop monitoring
+      this.stopMessageSendMonitoring();
+      this.stopClipboardMonitoring();
+      return;
+    }
+
+    // Advance to next message
+    this.currentMessageIndex++;
+    const nextMessage = this.sequentialMessages[this.currentMessageIndex];
+
+    this.addConsoleLog(
+      "UI",
+      `✅ Message sent! Auto-advancing to message ${
+        this.currentMessageIndex + 1
+      }/${this.sequentialMessages.length}`,
+      {
+        messageIndex: this.currentMessageIndex + 1,
+        totalMessages: this.sequentialMessages.length,
+        messagePreview: nextMessage.substring(0, 60) + "...",
+      }
+    );
+
+    // Copy next message to clipboard
+    await this.copyTextToClipboard(nextMessage);
+    this.lastCopiedText = nextMessage;
+
+    // Start monitoring for next send
+    this.startMessageSendMonitoring(nextMessage);
+
+    // Update display
+    this.updateSequentialIndicator();
+
+    // If this is the last message, stop monitoring
+    if (this.currentMessageIndex >= this.sequentialMessages.length - 1) {
+      this.stopMessageSendMonitoring();
+      this.stopClipboardMonitoring();
+    }
+  }
+
+  /**
+   * Start monitoring clipboard to detect when current message was pasted
+   */
+  startClipboardMonitoring() {
+    // Stop existing monitoring if any
+    this.stopClipboardMonitoring();
+
+    // Only monitor if we have multiple messages and are in sequential mode
+    if (this.sequentialMessages.length <= 1) return;
+    if (
+      this.currentMessageIndex < 0 ||
+      this.currentMessageIndex >= this.sequentialMessages.length - 1
+    )
+      return;
+
+    let lastClipboardContent = this.lastCopiedText;
+    let checkCount = 0;
+
+    this.clipboardMonitorInterval = setInterval(async () => {
+      try {
+        // Check if we still have messages to copy
+        if (
+          this.currentMessageIndex < 0 ||
+          this.currentMessageIndex >= this.sequentialMessages.length - 1
+        ) {
+          this.stopClipboardMonitoring();
+          return;
+        }
+
+        // Read current clipboard content
+        const currentClipboard = await navigator.clipboard.readText();
+        checkCount++;
+
+        // If clipboard content is different from what we copied, user likely pasted it
+        // We check if the new clipboard content is NOT one of our remaining messages
+        // This indicates the user pasted our message and possibly typed something new
+        if (currentClipboard !== this.lastCopiedText) {
+          // Check if the new clipboard content is NOT one of our messages
+          // If it's different, assume user pasted and is now working with new content
+          const isOurMessage = this.sequentialMessages.some(
+            (msg) =>
+              currentClipboard.trim() === msg.trim() ||
+              currentClipboard.includes(msg.trim()) ||
+              msg.trim().includes(currentClipboard.trim())
+          );
+
+          if (!isOurMessage || checkCount > 10) {
+            // Clipboard changed to something that's not our message
+            // Or we've been checking for a while - assume paste happened
+            // Small delay to ensure paste is complete
+            await new Promise((resolve) => setTimeout(resolve, 300));
+
+            // Copy the next message
+            this.currentMessageIndex++;
+            const nextMessage =
+              this.sequentialMessages[this.currentMessageIndex];
+
+            await this.copyTextToClipboard(nextMessage);
+            this.lastCopiedText = nextMessage;
+
+            // Refresh the display to show updated status
+            this.updateSequentialIndicator();
+
+            this.addConsoleLog(
+              "UI",
+              `Auto-copied message ${this.currentMessageIndex + 1}/${
+                this.sequentialMessages.length
+              }`,
+              {
+                message: nextMessage.substring(0, 50) + "...",
+              }
+            );
+
+            // Reset for next cycle
+            checkCount = 0;
+            lastClipboardContent = nextMessage;
+
+            // Stop monitoring if this was the last message
+            if (
+              this.currentMessageIndex >=
+              this.sequentialMessages.length - 1
+            ) {
+              this.stopClipboardMonitoring();
+              this.updateSequentialIndicator();
+            }
+          }
+        }
+
+        // Reset check count periodically to avoid false positives
+        if (checkCount > 20) {
+          checkCount = 0;
+        }
+      } catch (error) {
+        // Clipboard access might fail (permissions, etc.)
+        // Silently continue monitoring - no console logging for stealth
+      }
+    }, 800); // Check every 800ms (less aggressive)
+  }
+
+  /**
+   * Stop monitoring clipboard
+   */
+  stopClipboardMonitoring() {
+    if (this.clipboardMonitorInterval) {
+      clearInterval(this.clipboardMonitorInterval);
+      this.clipboardMonitorInterval = null;
+    }
+  }
+
+  /**
+   * Stop all monitoring when popup closes or status changes
+   */
+  stopAllMonitoring() {
+    this.stopClipboardMonitoring();
+    this.stopMessageSendMonitoring();
   }
 
   addConsoleLog(tag, message, meta) {
@@ -634,7 +1793,7 @@ class DOMExtractor {
       }
     } catch (error) {
       // Silently fail - don't interrupt user workflow
-      console.error("Error updating lead status:", error);
+      // Error logged to UI console only
       this.addConsoleLog("CRM", "Status update failed", {
         error: error.message,
       });
@@ -895,7 +2054,12 @@ class DOMExtractor {
     try {
       const convo = await this.supabaseService.getConversation(threadId);
       if (!convo) {
-        console.error("Cannot update phase - conversation not found");
+        // Error logged to UI console only
+        this.addConsoleLog(
+          "ERROR",
+          "Cannot update phase - conversation not found",
+          { threadId }
+        );
         return;
       }
 
@@ -994,7 +2158,7 @@ class DOMExtractor {
         this.setStatus("Ready", "LinkedIn page detected");
       }, 2000);
     } catch (error) {
-      console.error("Error extracting DOM:", error);
+      // Error logged to UI console only
       this.setStatus("Error", error.message);
       extractBtn.textContent = "❌ Error";
 
@@ -1055,7 +2219,7 @@ class DOMExtractor {
         extractDOMBtn.disabled = false;
       }, 2000);
     } catch (error) {
-      console.error("Error extracting thread DOM:", error);
+      // Error logged to UI console only
       this.addConsoleLog("ERROR", "Failed to extract thread DOM", {
         error: error.message,
       });
@@ -1084,31 +2248,28 @@ class DOMExtractor {
       });
 
       // OLD METHOD - Using executeScript (detectable)
-      console.log("Injecting script into tab:", tab.id, tab.url);
+      // STEALTH: No console logging - removed for security
 
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
           try {
-            console.log(
-              "Extracting conversation messages from:",
-              window.location.href
-            );
+            // STEALTH: No console logging - removed for security
 
             // Get thread ID
             const threadId =
               window.location.href.match(/\/thread\/([^\/\?]+)/)?.[1] ||
               "unknown";
-            console.log("Thread ID:", threadId);
+            // STEALTH: No console logging
 
             // Find the message input form first (there's only one active input)
             const messageForm = document.querySelector(".msg-form");
             if (!messageForm) {
-              console.warn("Could not find message input form");
+              // STEALTH: No console logging
               return { error: "Message input form not found" };
             }
 
-            console.log("Found message input form");
+            // STEALTH: No console logging
 
             // Work backwards from the input form to find the specific conversation thread
             // The input form should be within the active conversation thread
@@ -1123,41 +2284,39 @@ class DOMExtractor {
             }
 
             if (!activeConversationThread) {
-              console.warn(
-                "Could not find active conversation thread from input form"
-              );
+              // STEALTH: No console logging
               return { error: "Active conversation thread not found" };
             }
 
-            console.log("Found active conversation thread from input form");
+            // STEALTH: No console logging
 
             // Find the message list within the active conversation
             const messageListContainer = activeConversationThread.querySelector(
               ".msg-s-message-list"
             );
             if (!messageListContainer) {
-              console.warn("Could not find message list container");
+              // STEALTH: No console logging
               return { error: "Message list container not found" };
             }
 
-            console.log("Found message list container");
+            // STEALTH: No console logging
 
             // Find the message content list (only active conversation messages)
             const messageContentList = messageListContainer.querySelector(
               ".msg-s-message-list-content"
             );
             if (!messageContentList) {
-              console.warn("Could not find message content list");
+              // STEALTH: No console logging
               return { error: "Message content list not found" };
             }
 
-            console.log("Found message content list");
+            // STEALTH: No console logging
 
             // Extract individual messages
             const messageElements = messageContentList.querySelectorAll(
               ".msg-s-event-listitem"
             );
-            console.log(`Found ${messageElements.length} message elements`);
+            // STEALTH: No console logging
 
             const messages = [];
             messageElements.forEach((messageEl, index) => {
@@ -1506,17 +2665,17 @@ class DOMExtractor {
 
             return conversationData;
           } catch (e) {
-            console.error("Message extraction error:", e);
+            // STEALTH: No console logging - return error silently
             return { error: e.message };
           }
         },
       });
 
-      console.log("DOM extraction results:", results);
+      // STEALTH: No console logging
 
       if (results && results[0] && results[0].result) {
         const domData = results[0].result;
-        console.log("DOM data extracted:", domData);
+        // STEALTH: No console logging
 
         // Check if the injected function returned an error
         if (domData.error) {
@@ -1700,7 +2859,7 @@ class DOMExtractor {
       }, 2000);
       return aiResult;
     } catch (e) {
-      console.error("Generate response failed:", e);
+      // Error logged to UI console only
       // Only show errors in status if it's NOT a clipboard error
       if (!e.message || !e.message.includes("clipboard")) {
         this.setStatus("Error", e.message || "Failed to generate response");
@@ -1748,22 +2907,38 @@ class DOMExtractor {
         return;
       }
 
-      // Check if last message was sent by "you" - if so, skip auto-generation (wait for prospect response)
+      // Check if last non-deleted message was sent by "you" - if so, skip auto-generation (wait for prospect response)
+      // Deleted messages have text "This message has been deleted." and should be disregarded
       const messages = conversationData.messages || [];
       if (messages.length > 0) {
-        const lastMessage = messages[messages.length - 1];
-        const lastSender =
-          lastMessage.sender || (lastMessage.isFromYou ? "you" : "prospect");
-        if (lastSender === "you") {
-          this.addConsoleLog(
-            "AI",
-            "Skipping auto-gen - last message was sent by you, waiting for prospect response",
-            {
-              threadId,
-              lastMessageIndex: messages.length - 1,
-            }
-          );
-          return;
+        // Find the last non-deleted message by iterating backwards
+        let lastNonDeletedMessage = null;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const msg = messages[i];
+          if (
+            msg.text &&
+            msg.text.trim() !== "This message has been deleted."
+          ) {
+            lastNonDeletedMessage = msg;
+            break;
+          }
+        }
+
+        if (lastNonDeletedMessage) {
+          const lastSender =
+            lastNonDeletedMessage.sender ||
+            (lastNonDeletedMessage.isFromYou ? "you" : "prospect");
+          if (lastSender === "you") {
+            this.addConsoleLog(
+              "AI",
+              "Skipping auto-gen - last non-deleted message was sent by you, waiting for prospect response",
+              {
+                threadId,
+                lastMessageIndex: messages.indexOf(lastNonDeletedMessage),
+              }
+            );
+            return;
+          }
         }
       }
 
@@ -1844,6 +3019,27 @@ class DOMExtractor {
         }
       }
 
+      // DEBUG: Log the raw response from API BEFORE any processing
+      const rawResponse = aiResult.response;
+      this.addConsoleLog("DEBUG", "🔍 Raw API response received", {
+        responseType: typeof rawResponse,
+        responseLength: rawResponse ? rawResponse.length : 0,
+        first200Chars: rawResponse ? rawResponse.substring(0, 200) : "N/A",
+        hasComma: rawResponse ? rawResponse.includes(",") : false,
+        hasPeriod: rawResponse ? rawResponse.includes(".") : false,
+        charCodes: rawResponse
+          ? Array.from(rawResponse.substring(0, 100))
+              .map((c) => {
+                const code = c.charCodeAt(0);
+                if (code === 44) return `COMMA@${rawResponse.indexOf(c)}`;
+                if (code === 46) return `PERIOD@${rawResponse.indexOf(c)}`;
+                return null;
+              })
+              .filter((x) => x)
+              .slice(0, 10)
+          : [],
+      });
+
       // Show suggested response in the top bar (same as manual generation)
       this.setStatus("Suggested", aiResult.response);
       this.addToHistory(threadId, aiResult.response);
@@ -1851,22 +3047,34 @@ class DOMExtractor {
       // Update phase display
       this.updatePhaseDisplay(aiResult.phase);
 
-      // Copy to clipboard (silently handle errors - don't show in status)
+      // Copy first message to clipboard (silently handle errors - don't show in status)
+      // Use the split messages if available, otherwise use full response
       const [tab] = await chrome.tabs.query({
         active: true,
         currentWindow: true,
       });
       if (tab && tab.url && tab.url.includes("linkedin.com/messaging")) {
         try {
-          await this.aiService.injectResponse(aiResult.response, tab.id);
-          this.addConsoleLog(
-            "AI",
-            "Auto-generated response copied to clipboard",
-            {
-              threadId,
-              phase: aiResult.phase,
-            }
-          );
+          // Copy the full response (not individual messages) - ALWAYS auto-copy on generation
+          const copyResult = await this.aiService.injectResponse(aiResult.response, tab.id);
+          if (copyResult && copyResult.success) {
+            this.addConsoleLog(
+              "AI",
+              "✅ Auto-generated response copied to clipboard",
+              {
+                threadId,
+                phase: aiResult.phase,
+                messageCount: this.sequentialMessages?.length || 1,
+                method: copyResult.method,
+              }
+            );
+          } else {
+            throw new Error("injectResponse did not return success");
+          }
+
+          // Reset to no message selected (user will click on boxes to copy individual messages)
+          this.currentMessageIndex = -1;
+          this.lastCopiedText = "";
         } catch (clipboardError) {
           // Log clipboard error to console only, don't affect status
           this.addConsoleLog(
@@ -1877,7 +3085,6 @@ class DOMExtractor {
               threadId,
             }
           );
-          console.error("Clipboard copy failed (auto-gen):", clipboardError);
         }
       }
 
@@ -1910,7 +3117,11 @@ class DOMExtractor {
       const changed = threadId && threadId !== this.lastThreadId;
 
       // If conversation changed, check if it's in follow-up list and remove it
-      if (changed && this.followUpConversations && this.followUpConversations.length > 0) {
+      if (
+        changed &&
+        this.followUpConversations &&
+        this.followUpConversations.length > 0
+      ) {
         const isInFollowUpList = this.followUpConversations.some(
           (c) => c.thread_id === threadId
         );
@@ -2356,22 +3567,35 @@ class DOMExtractor {
       return;
     }
 
-    // Check if last message was sent by "you" - if so, skip auto-generation (wait for prospect response)
+    // Check if last non-deleted message was sent by "you" - if so, skip auto-generation (wait for prospect response)
+    // Deleted messages have text "This message has been deleted." and should be disregarded
     const messages = convo.messages || [];
     if (messages.length > 0) {
-      const lastMessage = messages[messages.length - 1];
-      const lastSender =
-        lastMessage.sender || (lastMessage.isFromYou ? "you" : "prospect");
-      if (lastSender === "you") {
-        this.addConsoleLog(
-          "AI",
-          "Skipping auto-gen - last message was sent by you, waiting for prospect response",
-          {
-            threadId,
-            lastMessageIndex: messages.length - 1,
-          }
-        );
-        return;
+      // Find the last non-deleted message by iterating backwards
+      let lastNonDeletedMessage = null;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.text && msg.text.trim() !== "This message has been deleted.") {
+          lastNonDeletedMessage = msg;
+          break;
+        }
+      }
+
+      if (lastNonDeletedMessage) {
+        const lastSender =
+          lastNonDeletedMessage.sender ||
+          (lastNonDeletedMessage.isFromYou ? "you" : "prospect");
+        if (lastSender === "you") {
+          this.addConsoleLog(
+            "AI",
+            "Skipping auto-gen - last non-deleted message was sent by you, waiting for prospect response",
+            {
+              threadId,
+              lastMessageIndex: messages.indexOf(lastNonDeletedMessage),
+            }
+          );
+          return;
+        }
       }
     }
 
@@ -2463,7 +3687,7 @@ class DOMExtractor {
         error: clipboardError.message,
         threadId,
       });
-      console.error("Clipboard copy failed:", clipboardError);
+      // Error logged to UI console only
     }
   }
 
@@ -3617,9 +4841,15 @@ class DOMExtractor {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      console.log(`Downloaded conversation JSON: ${filename}`);
+      // Success logged to UI console only
+      this.addConsoleLog("UI", `Downloaded conversation JSON: ${filename}`, {
+        filename,
+      });
     } catch (error) {
-      console.error("Error downloading JSON:", error);
+      // Error logged to UI console only
+      this.addConsoleLog("ERROR", "Error downloading JSON", {
+        error: error.message,
+      });
     }
   }
 
@@ -3718,7 +4948,7 @@ class DOMExtractor {
         testBtn.textContent = "❌ Failed";
       }
     } catch (error) {
-      console.error("Supabase test error:", error);
+      // Error logged to UI console only
       this.setStatus("Error", `Connection test failed: ${error.message}`);
       testBtn.textContent = "❌ Error";
     } finally {
@@ -3958,7 +5188,7 @@ class DOMExtractor {
         throw new Error("Failed to extract conversation data");
       }
     } catch (error) {
-      console.error("Error saving to Firebase:", error);
+      // Error logged to UI console only
       this.setStatus("Error", error.message);
       saveBtn.textContent = "❌ Error";
     } finally {
@@ -4290,12 +5520,16 @@ class DOMExtractor {
   toggleKnowledgeBase() {
     const content = document.getElementById("kbContent");
     const icon = document.getElementById("kbToggleIcon");
-    if (!content || !icon) return;
+    const panel = document.getElementById("kbPanel");
+    if (!content || !icon || !panel) return;
     const open = content.classList.toggle("open");
+    // Update panel appearance based on state
     if (open) {
+      panel.classList.remove("collapsed");
       icon.classList.add("open");
       icon.textContent = "▶";
     } else {
+      panel.classList.add("collapsed");
       icon.classList.remove("open");
       icon.textContent = "▶";
     }
@@ -4306,26 +5540,47 @@ class DOMExtractor {
   toggleScripts() {
     const content = document.getElementById("scriptsContent");
     const icon = document.getElementById("scriptsToggleIcon");
-    if (!content || !icon) return;
+    const panel = document.getElementById("scriptsPanel");
+    if (!content || !icon || !panel) return;
     const open = content.classList.toggle("open");
+    // Update panel appearance based on state
+    if (open) {
+      panel.classList.remove("collapsed");
+    } else {
+      panel.classList.add("collapsed");
+    }
     icon.style.transform = open ? "rotate(90deg)" : "rotate(0deg)";
   }
 
   togglePlaceholders() {
     const content = document.getElementById("placeholdersContent");
     const icon = document.getElementById("placeholdersToggleIcon");
-    if (!content || !icon) return;
+    const panel = document.getElementById("placeholdersPanel");
+    if (!content || !icon || !panel) return;
     const open = content.classList.toggle("open");
+    // Update panel appearance based on state
+    if (open) {
+      panel.classList.remove("collapsed");
+    } else {
+      panel.classList.add("collapsed");
+    }
     icon.style.transform = open ? "rotate(90deg)" : "rotate(0deg)";
   }
 
   async toggleFollowUp() {
     const content = document.getElementById("followUpContent");
     const icon = document.getElementById("followUpToggleIcon");
-    if (!content || !icon) return;
+    const panel = document.getElementById("followUpPanel");
+    if (!content || !icon || !panel) return;
     const open = content.classList.toggle("open");
+    // Update panel appearance based on state
+    if (open) {
+      panel.classList.remove("collapsed");
+    } else {
+      panel.classList.add("collapsed");
+    }
     icon.style.transform = open ? "rotate(90deg)" : "rotate(0deg)";
-    
+
     // Load conversations when panel opens
     if (open) {
       await this.loadFollowUpConversations();
@@ -4339,7 +5594,8 @@ class DOMExtractor {
 
     try {
       statusMessage.textContent = "Loading conversations...";
-      listContainer.innerHTML = '<div class="status-details" style="color: #9aa7b2">Loading...</div>';
+      listContainer.innerHTML =
+        '<div class="status-details" style="color: #9aa7b2">Loading...</div>';
 
       // Load conversations from both statuses
       const [unknown, interested] = await Promise.all([
@@ -4349,8 +5605,8 @@ class DOMExtractor {
 
       // Combine and store
       this.followUpConversations = [
-        ...unknown.map(c => ({ ...c, _status: 'unknown' })),
-        ...interested.map(c => ({ ...c, _status: 'interested' })),
+        ...unknown.map((c) => ({ ...c, _status: "unknown" })),
+        ...interested.map((c) => ({ ...c, _status: "interested" })),
       ];
 
       // Update count badge
@@ -4365,7 +5621,8 @@ class DOMExtractor {
       statusMessage.textContent = `Found ${this.followUpConversations.length} conversation(s) from last week and earlier that need follow-up.`;
     } catch (error) {
       console.error("Error loading follow-up conversations:", error);
-      listContainer.innerHTML = '<div class="status-details" style="color: #ffb4b4">Error loading conversations. Check console.</div>';
+      listContainer.innerHTML =
+        '<div class="status-details" style="color: #ffb4b4">Error loading conversations. Check console.</div>';
       statusMessage.textContent = "Error loading conversations.";
     }
   }
@@ -4374,142 +5631,347 @@ class DOMExtractor {
     const listContainer = document.getElementById("followUpList");
     if (!listContainer) return;
 
-    if (!this.followUpConversations || this.followUpConversations.length === 0) {
-      listContainer.innerHTML = '<div class="status-details" style="color: #9aa7b2">No conversations need follow-up.</div>';
+    if (
+      !this.followUpConversations ||
+      this.followUpConversations.length === 0
+    ) {
+      listContainer.innerHTML =
+        '<div class="status-details" style="color: #9aa7b2">No conversations need follow-up.</div>';
       return;
     }
 
+    // Separate conversations by status
+    const interested = this.followUpConversations.filter(
+      (c) => (c._status || c.status) === "interested"
+    );
+    const unknown = this.followUpConversations.filter(
+      (c) => (c._status || c.status) === "unknown"
+    );
+
+    // Determine status of selected profile
+    const selectedConvo = this.followUpConversations.find(
+      (c) => c.thread_id === this.selectedFollowUpThreadId
+    );
+    const selectedStatus = selectedConvo
+      ? selectedConvo._status || selectedConvo.status || "unknown"
+      : null;
+
     let html = "";
-    for (const convo of this.followUpConversations) {
-      const threadId = convo.thread_id;
-      const title = convo.title || "Unknown Lead";
-      const status = convo._status || convo.status || "unknown";
-      const updatedAt = convo.updated_at ? new Date(convo.updated_at) : null;
-      const relativeTime = updatedAt ? this.getRelativeTime(updatedAt) : "Unknown";
-      
-      // Extract name for display
-      const displayName = convo.placeholders?.name || title.replace(/^Lead:\s*/i, "") || "Unknown";
 
-      // Status badge color
-      const statusColor = status === "interested" ? "rgba(34, 197, 94, 0.6)" : "rgba(156, 163, 175, 0.6)";
-      const statusBg = status === "interested" ? "rgba(34, 197, 94, 0.15)" : "rgba(156, 163, 175, 0.15)";
-
-      html += `
-        <div
-          class="status"
+    // Single copy button at the top
+    html += `
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          margin-bottom: 8px;
+        "
+      >
+        <button
+          class="btn btn-ghost btn-small follow-up-copy-btn-top"
           style="
-            margin-bottom: 10px;
-            padding: 12px;
-            background: ${statusBg};
-            border: 1px solid ${statusColor};
+            font-size: 10px;
+            padding: 4px 8px;
+            min-height: 22px;
+            opacity: ${this.selectedFollowUpThreadId ? "1" : "0.5"};
+            pointer-events: ${this.selectedFollowUpThreadId ? "auto" : "none"};
           "
-          data-thread-id="${threadId}"
+          title="Copy message for selected profile"
         >
+          📋 Copy Message
+        </button>
+      </div>
+    `;
+
+    // Interested section
+    if (interested.length > 0) {
+      html += `
+        <div style="margin-bottom: 10px">
           <div
+            class="status-text"
             style="
+              font-size: 11px;
+              margin-bottom: 4px;
+              color: #22c55e;
               display: flex;
               align-items: center;
-              justify-content: space-between;
-              margin-bottom: 8px;
+              gap: 5px;
             "
           >
-            <div style="flex: 1; min-width: 0">
-              <div
-                class="status-text"
-                style="
-                  font-size: 14px;
-                  margin-bottom: 4px;
-                  overflow: hidden;
-                  text-overflow: ellipsis;
-                  white-space: nowrap;
-                "
-                title="${title}"
-              >
-                ${displayName}
-              </div>
-              <div
-                class="status-details"
-                style="
-                  font-size: 11px;
-                  display: flex;
-                  align-items: center;
-                  gap: 8px;
-                "
-              >
-                <span
-                  style="
-                    padding: 2px 6px;
-                    border-radius: 4px;
-                    background: ${statusBg};
-                    border: 1px solid ${statusColor};
-                    font-size: 10px;
-                    text-transform: capitalize;
-                  "
-                >
-                  ${status}
-                </span>
-                <span style="color: #9aa7b2">${relativeTime}</span>
-              </div>
-            </div>
+            <span>Interested</span>
+            <span
+              style="
+                font-size: 9px;
+                color: #9aa7b2;
+                font-weight: normal;
+                background: rgba(34, 197, 94, 0.15);
+                padding: 1px 4px;
+                border-radius: 3px;
+              "
+            >
+              ${interested.length}
+            </span>
           </div>
           <div
             style="
-              display: flex;
-              gap: 6px;
-              margin-top: 8px;
+              display: grid;
+              grid-template-columns: repeat(3, 1fr);
+              gap: 2px;
+              width: 100%;
             "
           >
-            <button
-              class="btn btn-ghost btn-small follow-up-open-btn"
-              data-thread-id="${threadId}"
-              data-url="${convo.url || `https://www.linkedin.com/messaging/thread/${threadId}`}"
-              style="
-                flex: 1;
-                font-size: 11px;
-                padding: 6px 10px;
-              "
-            >
-              Open
-            </button>
-            <button
-              class="btn btn-ghost btn-small follow-up-copy-btn"
-              data-thread-id="${threadId}"
-              data-status="${status}"
-              style="
-                flex: 1;
-                font-size: 11px;
-                padding: 6px 10px;
-              "
-            >
-              Copy Message
-            </button>
-          </div>
-        </div>
       `;
+
+      for (const convo of interested) {
+        html += this.renderFollowUpConversationItem(convo);
+      }
+
+      html += `</div></div>`;
+    }
+
+    // Unknown section
+    if (unknown.length > 0) {
+      html += `
+        <div style="margin-bottom: 10px">
+          <div
+            class="status-text"
+            style="
+              font-size: 11px;
+              margin-bottom: 4px;
+              color: #9ca3af;
+              display: flex;
+              align-items: center;
+              gap: 5px;
+            "
+          >
+            <span>Unknown</span>
+            <span
+              style="
+                font-size: 9px;
+                color: #9aa7b2;
+                font-weight: normal;
+                background: rgba(156, 163, 175, 0.15);
+                padding: 1px 4px;
+                border-radius: 3px;
+              "
+            >
+              ${unknown.length}
+            </span>
+          </div>
+          <div
+            style="
+              display: grid;
+              grid-template-columns: repeat(3, 1fr);
+              gap: 2px;
+              width: 100%;
+            "
+          >
+      `;
+
+      for (const convo of unknown) {
+        html += this.renderFollowUpConversationItem(convo);
+      }
+
+      html += `</div></div>`;
     }
 
     listContainer.innerHTML = html;
 
-    // Attach event listeners
-    listContainer.querySelectorAll(".follow-up-open-btn").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        const threadId = e.target.dataset.threadId;
-        const url = e.target.dataset.url;
-        this.openFollowUpConversation(threadId, url);
+    // Attach event listener for top copy button
+    const topCopyBtn = listContainer.querySelector(".follow-up-copy-btn-top");
+    if (topCopyBtn) {
+      topCopyBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this.selectedFollowUpThreadId && selectedStatus) {
+          this.copyFollowUpMessage(
+            this.selectedFollowUpThreadId,
+            selectedStatus
+          );
+        }
       });
-    });
+    }
 
-    listContainer.querySelectorAll(".follow-up-copy-btn").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        const threadId = e.target.dataset.threadId;
-        const status = e.target.dataset.status;
-        this.copyFollowUpMessage(threadId, status);
+    // Attach event listeners for profile cards (entire card is clickable)
+    listContainer
+      .querySelectorAll(".follow-up-profile-card")
+      .forEach((card) => {
+        card.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const threadId = card.dataset.threadId;
+          const url = card.dataset.url;
+          this.selectedFollowUpThreadId = threadId;
+          this.openFollowUpConversation(threadId, url);
+        });
       });
-    });
+  }
+
+  renderFollowUpConversationItem(convo) {
+    const threadId = convo.thread_id;
+    const title = convo.title || "Unknown Lead";
+    const status = convo._status || convo.status || "unknown";
+    const updatedAt = convo.updated_at ? new Date(convo.updated_at) : null;
+    const relativeTime = updatedAt
+      ? this.getRelativeTime(updatedAt)
+      : "Unknown";
+
+    // Extract name for display
+    const displayName =
+      convo.placeholders?.name || title.replace(/^Lead:\s*/i, "") || "Unknown";
+
+    // Status badge color
+    const statusColor =
+      status === "interested"
+        ? "rgba(34, 197, 94, 0.5)"
+        : "rgba(156, 163, 175, 0.4)";
+    const statusBg =
+      status === "interested"
+        ? "rgba(34, 197, 94, 0.1)"
+        : "rgba(156, 163, 175, 0.08)";
+    const isSelected = this.selectedFollowUpThreadId === threadId;
+    const selectedBorder = isSelected
+      ? "2px solid #3fb950"
+      : `1px solid ${statusColor}`;
+    const hoverBg =
+      status === "interested"
+        ? "rgba(34, 197, 94, 0.18)"
+        : "rgba(156, 163, 175, 0.15)";
+
+    return `
+      <div
+        class="status follow-up-profile-card"
+        style="
+          padding: 3px 4px;
+          background: ${statusBg};
+          border: ${selectedBorder};
+          border-radius: 4px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          min-height: 28px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          box-sizing: border-box;
+        "
+        data-thread-id="${threadId}"
+        data-url="${
+          convo.url || `https://www.linkedin.com/messaging/thread/${threadId}`
+        }"
+        onmouseover="this.style.background='${hoverBg}'; this.style.borderColor='${
+      status === "interested"
+        ? "rgba(34, 197, 94, 0.6)"
+        : "rgba(156, 163, 175, 0.5)"
+    }'"
+        onmouseout="this.style.background='${statusBg}'; this.style.borderColor='${statusColor}'"
+      >
+        <div
+          style="
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            width: 100%;
+            overflow: hidden;
+          "
+        >
+          <div
+            class="status-text"
+            style="
+              font-size: 10px;
+              font-weight: 600;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+              line-height: 1.2;
+              color: #e6edf3;
+            "
+            title="${title}"
+          >
+            ${displayName}
+          </div>
+          <div
+            class="status-details"
+            style="
+              font-size: 8px;
+              color: #9aa7b2;
+              line-height: 1.1;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            "
+          >
+            ${relativeTime}
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   async openFollowUpConversation(threadId, url) {
     try {
+      // Set as selected profile
+      this.selectedFollowUpThreadId = threadId;
+
+      // Re-render to show selection and enable copy button
+      this.renderFollowUpList();
+
+      // Find the conversation to get its status for message formatting
+      const convo = this.followUpConversations.find(
+        (c) => c.thread_id === threadId
+      );
+
+      // Copy message to clipboard before navigating
+      if (convo) {
+        const status = convo._status || convo.status || "unknown";
+        const formattedMessage = this.followUpService.formatScript(
+          status,
+          convo
+        );
+
+        if (formattedMessage) {
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              await navigator.clipboard.writeText(formattedMessage);
+              this.addConsoleLog("FOLLOW-UP", "Message copied to clipboard", {
+                threadId,
+                length: formattedMessage.length,
+              });
+            } else {
+              // Fallback: use the AI service's clipboard method
+              await this.aiService.injectResponse(formattedMessage);
+              this.addConsoleLog("FOLLOW-UP", "Message copied via fallback", {
+                threadId,
+              });
+            }
+          } catch (clipboardError) {
+            // Error logged to UI console only
+            this.addConsoleLog("ERROR", "Error copying message", {
+              error: clipboardError.message,
+            });
+            // Continue with navigation even if copy fails
+          }
+        }
+      }
+
+      // Mark conversation as reminded in Supabase
+      try {
+        const marked = await this.followUpService.markAsReminded(threadId);
+        if (marked) {
+          this.addConsoleLog("FOLLOW-UP", "Marked conversation as reminded", {
+            threadId,
+          });
+        } else {
+          this.addConsoleLog("FOLLOW-UP", "Failed to mark as reminded", {
+            threadId,
+          });
+        }
+      } catch (error) {
+        // Error logged to UI console only
+        this.addConsoleLog("FOLLOW-UP", "Error marking as reminded", {
+          error: error.message,
+          threadId,
+        });
+      }
+
       // Navigate current tab to LinkedIn conversation
       const [tab] = await chrome.tabs.query({
         active: true,
@@ -4518,10 +5980,10 @@ class DOMExtractor {
 
       if (tab && tab.id) {
         await chrome.tabs.update(tab.id, { url });
-        
+
         // Remove conversation from list client-side
         this.removeFollowUpConversation(threadId);
-        
+
         this.addConsoleLog("FOLLOW-UP", "Opened conversation", {
           threadId,
         });
@@ -4593,7 +6055,7 @@ class DOMExtractor {
         });
       }
     } catch (error) {
-      console.error("Error copying follow-up message:", error);
+      // Error logged to UI console only
       this.addConsoleLog("FOLLOW-UP", "Error copying message", {
         error: error.message,
         threadId,
@@ -4626,7 +6088,9 @@ class DOMExtractor {
     const diffDays = Math.floor(diffHours / 24);
 
     if (diffDays > 7) {
-      return `${Math.floor(diffDays / 7)} week${Math.floor(diffDays / 7) > 1 ? "s" : ""} ago`;
+      return `${Math.floor(diffDays / 7)} week${
+        Math.floor(diffDays / 7) > 1 ? "s" : ""
+      } ago`;
     } else if (diffDays > 0) {
       return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
     } else if (diffHours > 0) {
@@ -4649,9 +6113,7 @@ class DOMExtractor {
         container.innerHTML =
           '<div class="status-details" style="color: #ffb4b4">AI service not available. Start python main.py<br><small style="color: #9aa7b2;">Make sure to run: cd ai_module && python main.py</small></div>';
         // Still try to load scripts as a fallback
-        console.warn(
-          "Health check failed, but attempting to load scripts anyway..."
-        );
+        // STEALTH: No console logging
       }
 
       const result = await this.aiService.getScriptsList();
@@ -4672,16 +6134,20 @@ class DOMExtractor {
 
         html += `<div style="margin-bottom: 16px;">`;
         html += `<div class="status-details" style="font-weight: 600; color: #8ab4ff; margin-bottom: 8px;">${phaseName}</div>`;
-        html += `<div style="display: flex; flex-wrap: wrap; gap: 6px;">`;
+        // Grid layout: 2 columns for better clickability without taking more space
+        html += `<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">`;
 
-        for (const template of templates) {
+        templates.forEach((template, index) => {
+          // Number each script (1, 2, 3, etc.)
+          const scriptNumber = index + 1;
           html += `<button class="btn btn-ghost btn-small script-btn" 
                            data-phase="${phaseId}" 
                            data-template-id="${template.id}"
-                           style="font-size: 11px; padding: 4px 8px;">
-                    ${template.label}
+                           style="font-size: 11px; padding: 8px 6px; min-height: 32px; line-height: 1.2; display: flex; align-items: center; justify-content: center; text-align: center;">
+                    <span style="font-weight: 600; color: #7aa2ff; margin-right: 4px;">${scriptNumber}.</span>
+                    <span>${template.label}</span>
                   </button>`;
-        }
+        });
 
         html += `</div></div>`;
       }
@@ -4691,8 +6157,10 @@ class DOMExtractor {
       // Attach click handlers
       container.querySelectorAll(".script-btn").forEach((btn) => {
         btn.addEventListener("click", async (e) => {
-          const phase = e.target.getAttribute("data-phase");
-          const templateId = e.target.getAttribute("data-template-id");
+          // Get the button element (might be clicked on a child span)
+          const button = e.currentTarget || e.target.closest(".script-btn");
+          const phase = button.getAttribute("data-phase");
+          const templateId = button.getAttribute("data-template-id");
           await this.insertScript(phase, templateId);
         });
       });
@@ -4703,8 +6171,9 @@ class DOMExtractor {
         "phases of scripts"
       );
     } catch (error) {
-      console.error("Error loading scripts:", error);
+      // Error logged to UI console only
       const errorMsg = error.message || "Unknown error";
+      this.addConsoleLog("ERROR", "Error loading scripts", { error: errorMsg });
       container.innerHTML = `<div class="status-details" style="color: #ffb4b4">
         Error loading scripts: ${errorMsg}<br>
         <small style="color: #9aa7b2;">Make sure Flask is running: cd ai_module && python main.py</small>
@@ -4828,7 +6297,7 @@ class DOMExtractor {
         length: scriptText.length,
       });
     } catch (error) {
-      console.error("Error inserting script:", error);
+      // Error logged to UI console only
       this.addConsoleLog("SCRIPTS", "Error inserting script", {
         error: error.message,
       });

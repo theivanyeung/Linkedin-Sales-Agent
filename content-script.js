@@ -827,6 +827,113 @@
     });
   }
 
+  // Message monitoring state
+  let messageMonitorObserver = null;
+  let lastMessageCount = 0;
+  let lastYourMessageText = null;
+
+  /**
+   * Start monitoring for new messages from "you" (to detect when message is sent)
+   */
+  function startMessageMonitoring(expectedMessageText) {
+    // Stop existing monitoring
+    if (messageMonitorObserver) {
+      messageMonitorObserver.disconnect();
+      messageMonitorObserver = null;
+    }
+
+    lastYourMessageText = expectedMessageText;
+
+    // Find message list container
+    const messageList = document.querySelector(".msg-s-message-list-content");
+    if (!messageList) {
+      console.warn("Message list not found for monitoring");
+      return;
+    }
+
+    // Count current messages from "you"
+    const currentMessages = messageList.querySelectorAll(".msg-s-event-listitem");
+    lastMessageCount = currentMessages.length;
+
+    // Observe for new messages
+    messageMonitorObserver = new MutationObserver(() => {
+      const currentMessages = messageList.querySelectorAll(".msg-s-event-listitem");
+      const newCount = currentMessages.length;
+
+      // Check if a new message appeared
+      if (newCount > lastMessageCount) {
+        // Get the last message
+        const lastMessageEl = currentMessages[currentMessages.length - 1];
+        if (lastMessageEl) {
+          const bodyEl = lastMessageEl.querySelector(".msg-s-event-listitem__body");
+          const messageText = bodyEl ? bodyEl.textContent.trim() : "";
+
+          // Check if it's from "you"
+          const isOther = lastMessageEl.classList.contains("msg-s-event-listitem--other");
+          const outboundFlags =
+            lastMessageEl.classList.contains("msg-s-event-listitem--outbound") ||
+            lastMessageEl.classList.contains("msg-s-event-listitem--self") ||
+            !!lastMessageEl.querySelector(
+              ".msg-s-event-listitem__profile-picture--me, .msg-s-message-group--own"
+            );
+          const isFromYou = outboundFlags || !isOther;
+
+          // If it's from "you" and matches our expected message (or similar), notify popup
+          if (isFromYou && messageText) {
+            const textMatches = 
+              expectedMessageText &&
+              (messageText.includes(expectedMessageText.substring(0, 50)) ||
+               expectedMessageText.includes(messageText.substring(0, 50)));
+
+            if (textMatches || !expectedMessageText) {
+              // Notify popup that message was sent
+              chrome.runtime.sendMessage({
+                action: "messageSent",
+                messageText: messageText,
+              }).catch(() => {
+                // Ignore errors (popup might be closed)
+              });
+
+              // Stop monitoring
+              if (messageMonitorObserver) {
+                messageMonitorObserver.disconnect();
+                messageMonitorObserver = null;
+              }
+            }
+          }
+        }
+
+        lastMessageCount = newCount;
+      }
+    });
+
+    // Start observing
+    messageMonitorObserver.observe(messageList, {
+      childList: true,
+      subtree: false,
+    });
+
+    // Set a timeout to stop monitoring after 30 seconds (to prevent infinite monitoring)
+    setTimeout(() => {
+      if (messageMonitorObserver) {
+        messageMonitorObserver.disconnect();
+        messageMonitorObserver = null;
+      }
+    }, 30000);
+  }
+
+  /**
+   * Stop monitoring for new messages
+   */
+  function stopMessageMonitoring() {
+    if (messageMonitorObserver) {
+      messageMonitorObserver.disconnect();
+      messageMonitorObserver = null;
+    }
+    lastMessageCount = 0;
+    lastYourMessageText = null;
+  }
+
   /**
    * Handle messages from popup/background script
    */
@@ -841,6 +948,20 @@
           sendResponse({ success: false, error: error.message });
         });
       return true; // Keep channel open for async response
+    }
+
+    if (request.action === "startMessageMonitoring") {
+      // Start monitoring for when a message is sent
+      startMessageMonitoring(request.expectedMessageText || null);
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (request.action === "stopMessageMonitoring") {
+      // Stop monitoring
+      stopMessageMonitoring();
+      sendResponse({ success: true });
+      return true;
     }
 
     if (request.action === "extractConversation") {

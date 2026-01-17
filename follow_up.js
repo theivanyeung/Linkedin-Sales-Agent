@@ -60,7 +60,11 @@ class FollowUpService {
     }
 
     return conversations.filter((convo) => {
-      if (!convo.messages || !Array.isArray(convo.messages) || convo.messages.length === 0) {
+      if (
+        !convo.messages ||
+        !Array.isArray(convo.messages) ||
+        convo.messages.length === 0
+      ) {
         return false;
       }
 
@@ -130,9 +134,14 @@ class FollowUpService {
       const { end } = this._getLastWeekRange();
 
       // Query Supabase for conversations with status "unknown" from last week and earlier
+      // Exclude conversations that have already been reminded (reminded_at IS NULL)
       // Only filter by end date (last Sunday of last week) to include everything before that
       const response = await fetch(
-        `${this.baseUrl}/conversations?status=eq.unknown&updated_at=lte.${encodeURIComponent(end)}&order=updated_at.desc`,
+        `${
+          this.baseUrl
+        }/conversations?status=eq.unknown&updated_at=lte.${encodeURIComponent(
+          end
+        )}&reminded_at=is.null&order=updated_at.desc`,
         {
           method: "GET",
           headers: {
@@ -153,11 +162,14 @@ class FollowUpService {
       }
 
       const conversations = await response.json();
-      
+
       // Filter to only include conversations where last message is from "you"
       return this._filterByLastMessageFromYou(conversations || []);
     } catch (error) {
-      console.error("FollowUpService: Error in getUnknownStatusConversations", error);
+      console.error(
+        "FollowUpService: Error in getUnknownStatusConversations",
+        error
+      );
       return [];
     }
   }
@@ -177,9 +189,14 @@ class FollowUpService {
       const { end } = this._getLastWeekRange();
 
       // Query Supabase for conversations with status "interested" from last week and earlier
+      // Exclude conversations that have already been reminded (reminded_at IS NULL)
       // Only filter by end date (last Sunday of last week) to include everything before that
       const response = await fetch(
-        `${this.baseUrl}/conversations?status=eq.interested&updated_at=lte.${encodeURIComponent(end)}&order=updated_at.desc`,
+        `${
+          this.baseUrl
+        }/conversations?status=eq.interested&updated_at=lte.${encodeURIComponent(
+          end
+        )}&reminded_at=is.null&order=updated_at.desc`,
         {
           method: "GET",
           headers: {
@@ -192,20 +209,76 @@ class FollowUpService {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error("FollowUpService: Error fetching interested conversations", {
-          status: response.status,
-          error: errorText,
-        });
+        console.error(
+          "FollowUpService: Error fetching interested conversations",
+          {
+            status: response.status,
+            error: errorText,
+          }
+        );
         return [];
       }
 
       const conversations = await response.json();
-      
+
       // Filter to only include conversations where last message is from "you"
       return this._filterByLastMessageFromYou(conversations || []);
     } catch (error) {
-      console.error("FollowUpService: Error in getInterestedStatusConversations", error);
+      console.error(
+        "FollowUpService: Error in getInterestedStatusConversations",
+        error
+      );
       return [];
+    }
+  }
+
+  /**
+   * Mark a conversation as reminded by setting the reminded_at timestamp
+   * @param {string} threadId - The thread ID of the conversation
+   * @returns {Promise<boolean>} True if successful, false otherwise
+   */
+  async markAsReminded(threadId) {
+    try {
+      if (!this.baseUrl || !this.config?.anonKey) {
+        console.error("FollowUpService: Supabase configuration missing");
+        return false;
+      }
+
+      const response = await fetch(
+        `${this.baseUrl}/conversations?thread_id=eq.${encodeURIComponent(
+          threadId
+        )}`,
+        {
+          method: "PATCH",
+          headers: {
+            apikey: this.config.anonKey,
+            Authorization: `Bearer ${this.config.anonKey}`,
+            "Content-Type": "application/json",
+            Prefer: "return=representation",
+          },
+          body: JSON.stringify({
+            reminded_at: new Date().toISOString(),
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          "FollowUpService: Error marking conversation as reminded",
+          {
+            status: response.status,
+            error: errorText,
+            threadId,
+          }
+        );
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error("FollowUpService: Error in markAsReminded", error);
+      return false;
     }
   }
 }
@@ -216,3 +289,4 @@ if (typeof module !== "undefined" && module.exports) {
 } else {
   window.FollowUpService = FollowUpService;
 }
+

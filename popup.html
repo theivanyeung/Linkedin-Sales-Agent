@@ -264,6 +264,21 @@
       .collapsible:hover {
         color: #9fc2ff;
       }
+      /* When module is collapsed, make entire .status container clickable and button-like */
+      .status.collapsed {
+        cursor: pointer;
+        background: rgba(59, 130, 246, 0.1);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        padding: 10px 12px;
+        transition: all 0.2s ease;
+      }
+      .status.collapsed:hover {
+        background: rgba(59, 130, 246, 0.15);
+        border-color: rgba(59, 130, 246, 0.5);
+      }
+      .status.collapsed .collapsible {
+        margin-bottom: 0;
+      }
       .collapsible span {
         display: inline-flex;
         align-items: center;
@@ -521,7 +536,7 @@
       <div
         class="status-details"
         id="statusDetails"
-        style="position: relative; padding-right: 70px"
+        style="position: relative; padding-right: 70px; white-space: pre-wrap; width: 100%; max-width: 100%; box-sizing: border-box"
       >
         Click to extract current page DOM
         <button
@@ -540,6 +555,23 @@
           title="Copy response to clipboard"
         >
           📋 Copy
+        </button>
+        <button
+          id="nextMessageBtn"
+          class="btn btn-ghost btn-small"
+          style="
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 28px;
+            font-size: 11px;
+            padding: 4px 8px;
+            min-width: auto;
+            z-index: 10;
+          "
+          title="Skip to next message"
+        >
+          ⏭️ Next
         </button>
       </div>
       <div

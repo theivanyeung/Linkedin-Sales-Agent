@@ -96,7 +96,7 @@ PHASE_LIBRARY: Dict[str, Dict[str, Any]] = {
                 "description": "How to follow up when the lead shows interest.",
                 "script": (
                     "Sure, apply here: https://www.prodicity.org\n"
-                    "Spots are limited, so if applying, aim to get it submitted by Jan 18th. "
+                    "Spots are limited, so if applying, aim to get it submitted by Jan 21st. "
                     "for interviews as we're finalizing applications\n"
                 ),
                 "cta_templates": [

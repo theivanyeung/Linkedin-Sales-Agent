@@ -345,6 +345,61 @@
           "Liberation Mono", "Courier New", monospace;
         color: #c9d1d9;
       }
+
+      /* Toast: database updated notification */
+      #toast-container {
+        position: fixed;
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        pointer-events: none;
+      }
+      .toast {
+        background: #2ea043;
+        color: #ffffff;
+        border: 1px solid #3fb950;
+        border-radius: 12px;
+        padding: 14px 22px;
+        font-size: 16px;
+        font-weight: 600;
+        box-shadow: 0 6px 20px rgba(46, 160, 67, 0.5);
+        animation: toast-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+      }
+      .toast.toast-copy {
+        background: #334155;
+        color: #e2e8f0;
+        border: 1px solid #475569;
+        padding: 8px 14px;
+        font-size: 12px;
+        font-weight: 500;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        animation: toast-in-subtle 0.25s ease-out;
+      }
+      @keyframes toast-in-subtle {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes toast-in {
+        from {
+          opacity: 0;
+          transform: translateY(28px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
     </style>
   </head>
   <body>
@@ -650,6 +705,35 @@
       </div>
     </div>
 
+    <div class="status" id="followUpPanel" style="margin-top: 12px">
+      <button class="collapsible" id="followUpToggle">
+        <span id="followUpToggleIcon">▶</span>
+        <span>Follow-Ups</span>
+        <span
+          id="followUpCount"
+          style="
+            margin-left: auto;
+            font-size: 11px;
+            color: #9aa7b2;
+            font-weight: normal;
+          "
+          >0</span
+        >
+      </button>
+      <div id="followUpContent" class="collapsible-content">
+        <div
+          class="status-details"
+          id="followUpStatusMessage"
+          style="margin-bottom: 10px"
+        >
+          Conversations from last week and earlier that need follow-up.
+        </div>
+        <div id="followUpList">
+          <div class="status-details" style="color: #9aa7b2">Loading...</div>
+        </div>
+      </div>
+    </div>
+
     <div class="status" id="kbPanel" style="margin-top: 12px">
       <button class="collapsible" id="kbToggle">
         <span id="kbToggleIcon">▶</span>
@@ -709,35 +793,6 @@
       </div>
     </div>
 
-    <div class="status" id="followUpPanel" style="margin-top: 12px">
-      <button class="collapsible" id="followUpToggle">
-        <span id="followUpToggleIcon">▶</span>
-        <span>Follow-Ups</span>
-        <span
-          id="followUpCount"
-          style="
-            margin-left: auto;
-            font-size: 11px;
-            color: #9aa7b2;
-            font-weight: normal;
-          "
-          >0</span
-        >
-      </button>
-      <div id="followUpContent" class="collapsible-content">
-        <div
-          class="status-details"
-          id="followUpStatusMessage"
-          style="margin-bottom: 10px"
-        >
-          Conversations from last week and earlier that need follow-up.
-        </div>
-        <div id="followUpList">
-          <div class="status-details" style="color: #9aa7b2">Loading...</div>
-        </div>
-      </div>
-    </div>
-
     <div class="status" id="consolePanel" style="margin-top: 14px">
       <div
         class="status-text"
@@ -780,6 +835,8 @@
         "
       ></div>
     </div>
+
+    <div id="toast-container" aria-live="polite"></div>
 
     <!-- Supabase Config -->
     <script src="supabase-config.js"></script>

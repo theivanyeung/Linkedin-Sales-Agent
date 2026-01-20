@@ -20,6 +20,7 @@ class DOMExtractor {
   }
 
   init() {
+    this.setupToast();
     this.setupEventListeners();
     this.checkPageStatus();
     // Load conversation data when page loads or conversation changes
@@ -41,6 +42,21 @@ class DOMExtractor {
         this.stopAllMonitoring();
       }
     });
+  }
+
+  setupToast() {
+    const showToast = (message, className = "toast", durationMs = 2500) => {
+      const container = document.getElementById("toast-container");
+      if (!container) return;
+      const el = document.createElement("div");
+      el.className = className;
+      el.textContent = message;
+      container.appendChild(el);
+      setTimeout(() => el.remove(), durationMs);
+    };
+    window.showDbToast = (msg = "Database updated") => showToast(msg, "toast");
+    window.showCopyToast = (msg = "Copied to clipboard") =>
+      showToast(msg, "toast toast-copy", 1800);
   }
 
   setupEventListeners() {
@@ -184,15 +200,13 @@ class DOMExtractor {
         }
       });
 
-      // Also keep the button clickable (for when expanded)
+      // Button is the primary toggle; always stop propagation so the panel
+      // handler does not also run toggle() (which caused double-toggle when
+      // collapsed: open then close, making it seem like several clicks were needed).
       const button = panel.querySelector(".collapsible");
       if (button) {
         button.addEventListener("click", (e) => {
-          // Only stop propagation if we're actually toggling
-          // This allows the panel click handler to work when collapsed
-          if (content && content.classList.contains("open")) {
-            e.stopPropagation();
-          }
+          e.stopPropagation();
           toggle();
         });
       }
@@ -418,8 +432,8 @@ class DOMExtractor {
             throw new Error("injectResponse did not return success");
           }
         } else if (aiResult.response) {
-          // Fallback if tab not available - try direct clipboard
-          await this.copyTextToClipboard(aiResult.response);
+          // Fallback if tab not available - try direct clipboard (no toast; auto-copy on generate)
+          await this.copyTextToClipboard(aiResult.response, { showCopyToast: false });
           this.addConsoleLog("AI", "✅ Full response auto-copied (fallback method)", {
             threadId,
             phase: aiResult.phase,
@@ -440,7 +454,7 @@ class DOMExtractor {
         // Try one more fallback
         try {
           if (aiResult.response) {
-            await this.copyTextToClipboard(aiResult.response);
+            await this.copyTextToClipboard(aiResult.response, { showCopyToast: false });
             this.addConsoleLog("UI", "✅ Response copied using final fallback", {});
           }
         } catch (finalError) {
@@ -1047,6 +1061,8 @@ class DOMExtractor {
             length: messageToCopy.length,
             method: result.method,
           });
+          if (typeof window.showCopyToast === "function")
+            window.showCopyToast("Copied to clipboard");
         } else {
           throw new Error("injectResponse returned no success");
         }
@@ -1284,11 +1300,13 @@ class DOMExtractor {
   }
 
   /**
-   * Copy text to clipboard with visual feedback
+   * Copy text to clipboard with visual feedback.
+   * @param {string} text - Text to copy.
+   * @param {{ showCopyToast?: boolean }} opts - showCopyToast: false to skip the copy-toast (e.g. auto-copy on generate). Default true.
    */
-  async copyTextToClipboard(text) {
+  async copyTextToClipboard(text, opts = {}) {
     const copyBtn = document.getElementById("copyResponseBtn");
-    
+    const showToast = opts.showCopyToast !== false;
     try {
       // Try modern clipboard API first
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1296,6 +1314,8 @@ class DOMExtractor {
         this.addConsoleLog("UI", "Message copied to clipboard", {
           length: text.length,
         });
+        if (showToast && typeof window.showCopyToast === "function")
+          window.showCopyToast("Copied to clipboard");
 
         // Show visual feedback
         const originalText = copyBtn.textContent;
@@ -1328,12 +1348,15 @@ class DOMExtractor {
         textarea.style.left = "-999999px";
         document.body.appendChild(textarea);
         textarea.select();
-        document.execCommand("copy");
+        const copied = document.execCommand("copy");
         document.body.removeChild(textarea);
+        if (!copied) throw new Error("execCommand copy failed");
 
         this.addConsoleLog("UI", "Message copied to clipboard (fallback)", {
           length: text.length,
         });
+        if (showToast && typeof window.showCopyToast === "function")
+          window.showCopyToast("Copied to clipboard");
 
         // Show visual feedback
         const originalText = copyBtn.textContent;
@@ -1526,12 +1549,12 @@ class DOMExtractor {
             // Small delay to ensure paste is complete
             await new Promise((resolve) => setTimeout(resolve, 300));
 
-            // Copy the next message
+            // Copy the next message (no toast; auto-advance after detected paste)
             this.currentMessageIndex++;
             const nextMessage =
               this.sequentialMessages[this.currentMessageIndex];
 
-            await this.copyTextToClipboard(nextMessage);
+            await this.copyTextToClipboard(nextMessage, { showCopyToast: false });
             this.lastCopiedText = nextMessage;
 
             // Refresh the display to show updated status
@@ -3681,6 +3704,8 @@ class DOMExtractor {
     try {
       await this.aiService.injectResponse(aiResult.response, tab.id);
       this.addConsoleLog("AI", "Response copied to clipboard", { threadId });
+      if (typeof window.showCopyToast === "function")
+        window.showCopyToast("Copied to clipboard");
     } catch (clipboardError) {
       // Log clipboard error to console only, don't affect status
       this.addConsoleLog("ERROR", "Failed to copy to clipboard", {
@@ -3745,6 +3770,8 @@ class DOMExtractor {
     });
     if (tab && tab.url && tab.url.includes("linkedin.com/messaging")) {
       await this.aiService.injectResponse(text, tab.id);
+      if (typeof window.showCopyToast === "function")
+        window.showCopyToast("Copied to clipboard");
     }
     this.updateHistoryUI(threadId);
   }
@@ -5935,12 +5962,16 @@ class DOMExtractor {
                 threadId,
                 length: formattedMessage.length,
               });
+              if (typeof window.showCopyToast === "function")
+                window.showCopyToast("Copied to clipboard");
             } else {
               // Fallback: use the AI service's clipboard method
               await this.aiService.injectResponse(formattedMessage);
               this.addConsoleLog("FOLLOW-UP", "Message copied via fallback", {
                 threadId,
               });
+              if (typeof window.showCopyToast === "function")
+                window.showCopyToast("Copied to clipboard");
             }
           } catch (clipboardError) {
             // Error logged to UI console only
@@ -6030,6 +6061,8 @@ class DOMExtractor {
             threadId,
             length: formattedMessage.length,
           });
+          if (typeof window.showCopyToast === "function")
+            window.showCopyToast("Copied to clipboard");
 
           // Show visual feedback
           const btn = document.querySelector(
@@ -6053,6 +6086,8 @@ class DOMExtractor {
         this.addConsoleLog("FOLLOW-UP", "Message copied via fallback", {
           threadId,
         });
+        if (typeof window.showCopyToast === "function")
+          window.showCopyToast("Copied to clipboard");
       }
     } catch (error) {
       // Error logged to UI console only
@@ -6296,6 +6331,8 @@ class DOMExtractor {
         templateId,
         length: scriptText.length,
       });
+      if (typeof window.showCopyToast === "function")
+        window.showCopyToast("Copied to clipboard");
     } catch (error) {
       // Error logged to UI console only
       this.addConsoleLog("SCRIPTS", "Error inserting script", {

@@ -326,6 +326,8 @@ class SupabaseService {
           window.uiConsoleLog("DB", "updated existing", {
             threadId: conversationData.threadId,
           });
+        if (typeof window.showDbToast === "function")
+          window.showDbToast("Database updated");
         return conversationData.threadId;
       } else {
         // Insert new
@@ -414,6 +416,8 @@ class SupabaseService {
           window.uiConsoleLog("DB", "inserted new", {
             threadId: conversationData.threadId,
           });
+        if (typeof window.showDbToast === "function")
+          window.showDbToast("Database updated");
         return conversationData.threadId;
       }
     } catch (error) {
@@ -542,6 +546,8 @@ class SupabaseService {
       console.log("Conversation updated in Supabase:", threadId);
       if (window.uiConsoleLog)
         window.uiConsoleLog("DB", "updateConversation ok", { threadId });
+      if (typeof window.showDbToast === "function")
+        window.showDbToast("Database updated");
       return threadId;
     } catch (error) {
       console.error("Error updating Supabase:", error);
@@ -609,6 +615,8 @@ class SupabaseService {
       console.log("Lead status updated in Supabase:", threadId, status);
       if (window.uiConsoleLog)
         window.uiConsoleLog("DB", "updateLeadStatus ok", { threadId, status });
+      if (typeof window.showDbToast === "function")
+        window.showDbToast("Database updated");
       return threadId;
     } catch (error) {
       console.error("Error updating lead status:", error);
